@@ -1,7 +1,9 @@
 package com.bubble.rikkahub.data
 
 import android.Manifest
+import android.app.PendingIntent
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
@@ -30,6 +32,8 @@ object NotificationHelper {
             .setContentTitle(conv.displayName) // custom nickname if set, else server title
             .setContentText("有新消息未读")
             .setAutoCancel(true)
+            // Tapping the notification opens the app at this conversation.
+            .setContentIntent(buildContentIntent(context, conv.id))
 
         conv.customAvatarUri?.let { uri ->
             val bitmap = loadBitmap(context, uri)
@@ -39,6 +43,19 @@ object NotificationHelper {
         }
 
         NotificationManagerCompat.from(context).notify(conv.id.hashCode(), builder.build())
+    }
+
+    private fun buildContentIntent(context: Context, conversationId: String): PendingIntent {
+        val intent = Intent(context, MainActivity::class.java).apply {
+            putExtra(MainActivity.EXTRA_CONVERSATION_ID, conversationId)
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        return PendingIntent.getActivity(
+            context,
+            conversationId.hashCode(),
+            intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
     }
 
     private suspend fun loadBitmap(context: Context, uriString: String): Bitmap? {

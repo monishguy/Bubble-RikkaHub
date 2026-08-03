@@ -50,12 +50,22 @@ private val bottomNavItems = listOf(
 )
 
 @Composable
-fun MainNavGraph(appContainer: AppContainer) {
+fun MainNavGraph(appContainer: AppContainer, initialConversationId: String? = null) {
     val navController = rememberNavController()
     val listTheme by appContainer.appPreferences.listTheme.collectAsStateWithLifecycle(ListTheme.FLAT)
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val isOnChat = currentRoute == Routes.CHAT
+
+    // When launched from a notification, jump straight into the conversation.
+    LaunchedEffect(initialConversationId) {
+        if (initialConversationId != null) {
+            navController.navigate(Routes.chat(initialConversationId)) {
+                popUpTo(Routes.CONVERSATIONS) { saveState = true }
+                launchSingleTop = true
+            }
+        }
+    }
 
     Scaffold(
         bottomBar = {

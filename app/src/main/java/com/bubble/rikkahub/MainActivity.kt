@@ -11,6 +11,9 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
 import androidx.core.content.ContextCompat
 import com.bubble.rikkahub.ui.navigation.MainNavGraph
 import com.bubble.rikkahub.ui.theme.Bubble_RikkahubTheme
@@ -19,6 +22,9 @@ class MainActivity : ComponentActivity() {
 
     private val notificationPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    /** Conversation to open when launched from a notification, if any. */
+    private var pendingConversationId by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,10 +39,27 @@ class MainActivity : ComponentActivity() {
             this, Intent(this, BackgroundSyncService::class.java)
         )
 
+        handleIntent(intent)
+
         setContent {
             Bubble_RikkahubTheme {
-                MainNavGraph(appContainer = (application as BubbleRhApp).container)
+                MainNavGraph(
+                    appContainer = (application as BubbleRhApp).container,
+                    initialConversationId = pendingConversationId
+                )
             }
+        }
+    }
+
+    override fun onNewIntent(intent: android.content.Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: android.content.Intent?) {
+        val id = intent?.getStringExtra(EXTRA_CONVERSATION_ID)
+        if (!id.isNullOrBlank()) {
+            pendingConversationId = id
         }
     }
 
@@ -62,5 +85,6 @@ class MainActivity : ComponentActivity() {
 
     companion object {
         const val UNREAD_CHANNEL_ID = "unread_messages"
+        const val EXTRA_CONVERSATION_ID = "conversation_id"
     }
 }

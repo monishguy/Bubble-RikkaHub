@@ -1,0 +1,66 @@
+package com.bubble.rikkahub
+
+import android.Manifest
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.os.Bundle
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.core.content.ContextCompat
+import com.bubble.rikkahub.ui.navigation.MainNavGraph
+import com.bubble.rikkahub.ui.theme.Bubble_RikkahubTheme
+
+class MainActivity : ComponentActivity() {
+
+    private val notificationPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        enableEdgeToEdge()
+
+        createNotificationChannel()
+        requestNotificationPermission()
+
+        // Start the background sync (keep-alive) service so new messages are detected even
+        // when the app is backgrounded.
+        ContextCompat.startForegroundService(
+            this, Intent(this, BackgroundSyncService::class.java)
+        )
+
+        setContent {
+            Bubble_RikkahubTheme {
+                MainNavGraph(appContainer = (application as BubbleRhApp).container)
+            }
+        }
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                UNREAD_CHANNEL_ID,
+                "新消息",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply { description = "收到未读消息时通知" }
+            getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
+        }
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) !=
+            PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
+    companion object {
+        const val UNREAD_CHANNEL_ID = "unread_messages"
+    }
+}

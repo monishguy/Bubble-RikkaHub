@@ -1,0 +1,262 @@
+Web 服务器与 API 访问
+相关源文件
+app/build.gradle.kts
+app/src/main/AndroidManifest.xml
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+app/src/main/java/me/rerere/rikkahub/RouteActivity.kt
+app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
+app/src/main/java/me/rerere/rikkahub/di/ViewModelModule.kt
+app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
+app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingPage.kt
+app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingWebPage.kt
+app/src/main/java/me/rerere/rikkahub/web/dto/WebDto.kt
+app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+app/src/main/java/me/rerere/rikkahub/web/routes/FilesRoutes.kt
+app/src/main/java/me/rerere/rikkahub/web/routes/SettingsRoutes.kt
+gradle/libs.versions.toml
+web-ui/app/components/input/chat-input.tsx
+web-ui/app/components/input/extension-picker.tsx
+web-ui/app/components/logo.tsx
+web-ui/app/components/markdown/code-block.tsx
+web-ui/app/components/markdown/markdown.css
+web-ui/app/components/markdown/markdown.tsx
+web-ui/app/components/message/chain-of-thought.tsx
+web-ui/app/components/message/chat-message-avatar-row.tsx
+web-ui/app/components/message/chat-message.tsx
+web-ui/app/components/message/message-part.tsx
+web-ui/app/components/message/parts/reasoning-step-part.tsx
+web-ui/app/components/message/parts/text-part.tsx
+web-ui/app/lib/clipboard.ts
+web-ui/app/lib/utils.ts
+web-ui/app/locales/en-US/input.json
+web-ui/app/locales/zh-CN/input.json
+web-ui/app/routes/conversations.tsx
+web-ui/app/stores/app-store.ts
+web-ui/app/stores/index.ts
+web-ui/app/stores/slices/clock-slice.ts
+web-ui/app/stores/slices/types.ts
+web-ui/app/types/dto.ts
+web-ui/app/types/settings.ts
+web-ui/bun.lock
+web-ui/package.json
+目的与范围
+RikkaHub 包含一个内嵌的 HTTP 服务器，通过 REST API 公开应用的聊天功能和会话管理。这使得外部客户端（网页浏览器、脚本、其他应用程序）能够通过 HTTP 远程与 AI 聊天系统交互。该 Web 服务器作为 Android 前台服务运行，支持仅本地主机和局域网访问模式，并可选配 JWT 认证。系统还包含一个基于 React 的现代 Web 界面，通过消费这些 API 端点提供桌面级聊天体验。
+
+架构概览
+Web 服务器系统由多个组件组成，这些组件协同工作，为 RikkaHub 的功能提供 HTTP 访问。
+
+标题：Web 服务器系统架构
+
+来源： 
+app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
+27-43
+ 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+120-146
+ 
+web-ui/app/services/api.ts
+38
+ 
+app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
+87-95
+
+组件职责
+组件	类型	职责
+WebServerService	Android 服务	管理前台生命周期，创建通知，处理 ACTION_START/ACTION_STOP 
+app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
+27-86
+WebServerManager	状态管理器	控制 Ktor 服务器启动，管理 mDNS 注册，并与 ChatService 和 ConversationRepository 协调 
+app/src/main/java/me/rerere/rikkahub/web/WebServerManager.kt
+1-20
+ 
+app/src/main/java/me/rerere/rikkahub/di/AppModule.kt
+87-95
+Ktor 服务器	HTTP 引擎	使用 CIO 引擎处理 HTTP 请求、路由和 SSE 流式传输 
+gradle/libs.versions.toml
+60
+Web UI	React 应用	使用 React Router 7 和 Tailwind CSS 提供功能齐全的 Web 界面 
+web-ui/package.json
+14-50
+来源： 
+app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
+27-86
+ 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+42-45
+ 
+web-ui/app/routes/conversations.tsx
+1-50
+ 
+web-ui/package.json
+14-50
+
+基于 React 的 Web 用户界面
+Web 用户界面是一个使用 React 构建的现代化前端，与 Android 应用的功能保持一致。它通过标准 REST API 和服务器发送事件（SSE）与 Android Ktor 服务器进行通信。
+
+数据流与状态管理
+Web UI 结合了本地状态和专用存储（通过 Zustand）来管理聊天体验：
+
+标题：Web UI 数据流
+
+来源： 
+web-ui/app/routes/conversations.tsx
+30-48
+ 
+web-ui/app/components/input/chat-input.tsx
+176-228
+ 
+web-ui/app/services/api.ts
+38
+ 
+web-ui/app/stores/index.ts
+1-10
+
+Web UI 的主要功能
+富文本消息渲染 ：ChatMessage 组件负责渲染文本、图片、视频、音频以及推理部分 
+web-ui/app/components/message/chat-message.tsx
+60-75
+思维链 ：支持通过 reasoning 消息部分渲染模型思考过程 
+web-ui/app/components/message/chat-message.tsx
+89-90
+ 这包括时长计算以及基于 displaySetting 的自动展开/折叠 
+web-ui/app/components/message/parts/reasoning-step-part.tsx
+27-69
+文件附件 ：在上传前通过 detectUploadFile 使用魔数检测文件类型（图片、视频、音频、文档） 
+web-ui/app/components/input/chat-input.tsx
+63-97
+高级输入 ：包括 MCP 工具、推理级别和搜索服务的选择器 
+web-ui/app/components/input/chat-input.tsx
+21-28
+草稿管理 ：支持通过创建草稿来编辑现有消息，草稿会跟踪源部分和文本索引，通过 toEditDraft 实现 
+web-ui/app/routes/conversations.tsx
+168-200
+Markdown 渲染 ：使用 Streamdown 进行动画 GFM 和 LaTeX 渲染，支持行内 \( 和块级 \<FileRef file-url="https://github.com/rikkahub/rikkahub/blob/34d755e5/ 公式 [web-ui/app/components/markdown/markdown.tsx#L19-L58" min=19 max=58 file-path="` 公式 [web-ui/app/components/markdown/markdown.tsx">Hii 
+web-ui/app/components/markdown/markdown.tsx
+112-117
+HTTP API 端点
+Ktor 服务器暴露了多个路由组，以促进与 Web UI 和外部客户端的通信。
+
+对话与聊天路由
+通过 ConversationRoutes.kt 和 ChatService 处理。
+
+GET /api/conversations：列出所有对话 
+app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+1-10
+POST /api/conversations：创建新对话 
+app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+1-10
+GET /api/conversations/{id}：获取对话详情和消息节点 
+app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+1-10
+POST /api/chat/stream：AI 生成的主要端点（SSE） 
+web-ui/app/routes/conversations.tsx
+30
+文件管理
+通过 FilesRoutes.kt 处理。
+
+POST /api/files/upload：上传聊天消息的附件 
+app/src/main/java/me/rerere/rikkahub/web/routes/FilesRoutes.kt
+1-10
+GET /api/files/{id}：下载或流式传输管理的文件 
+app/src/main/java/me/rerere/rikkahub/web/routes/FilesRoutes.kt
+1-10
+DELETE /api/files/{id}：从存储中移除文件 
+app/src/main/java/me/rerere/rikkahub/web/routes/FilesRoutes.kt
+1-10
+来源： 
+app/src/main/java/me/rerere/rikkahub/web/routes/ConversationRoutes.kt
+1-20
+ 
+app/src/main/java/me/rerere/rikkahub/web/routes/FilesRoutes.kt
+1-20
+ 
+web-ui/app/services/api.ts
+38
+
+服务生命周期与 mDNS
+Web 服务器的生命周期通过 WebServerService 前台服务进行管理。
+
+启动顺序
+RikkaHubApp 在应用程序 onCreate
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+120-125
+期间检查 webServerEnabled 在 SettingsStore 中。
+验证 Android 13+上的 POST_NOTIFICATIONS 权限 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+126-134
+使用 ACTION_START 和端口配置 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+135-140
+启动 WebServerService
+WebServerManager 使用 CIO 引擎初始化 Ktor 
+gradle/libs.versions.toml
+60
+NsdServiceRegistrar（mDNS）将服务注册为 _http._tcp，用于局域网发现 
+gradle/libs.versions.toml
+62
+网络绑定模式
+仅限本地主机 ：绑定到 127.0.0.1。访问仅限于当前设备 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+138
+局域网模式 ：绑定到 0.0.0.0。可通过局域网 IP 或 .local 主机名进行访问。
+来源： 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+120-146
+ 
+app/src/main/AndroidManifest.xml
+9-12
+ 
+app/src/main/java/me/rerere/rikkahub/service/WebServerService.kt
+27-43
+
+配置与设置
+Web 服务器设置持久化存储在 SettingsStore 中，并通过 SettingWebPage.kt 进行管理。
+
+设置	类型	默认	描述
+webServerEnabled	布尔值	false	应用启动时自动启动 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+125
+webServerPort	整数	8080	HTTP 服务器的端口 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+137
+webServerLocalhostOnly	布尔值	false	限制对设备的访问 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+138
+webServerJwtEnabled	布尔值	false	为 API 启用 JWT 认证 
+app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingWebPage.kt
+81-100
+来源： 
+app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingWebPage.kt
+81-100
+ 
+app/src/main/java/me/rerere/rikkahub/RikkaHubApp.kt
+120-146
+
+端口验证
+界面确保端口在有效范围内（1024-65535），并在启动服务器前检查其可用性 
+app/src/main/java/me/rerere/rikkahub/ui/pages/setting/SettingWebPage.kt
+197-226
+
+模型上下文协议（MCP）集成
+Web 服务器还支持远程 MCP 工具执行。McpManager 负责管理 MCP 客户端（SSE 或 Streamable 传输）的生命周期，并向 AI 生成流水线提供工具。
+
+标题：MCP 服务集成
+
+传输 ：使用 SseClientTransport 通过 HTTP/SSE 与远程 MCP 服务器通信 
+gradle/libs.versions.toml
+49
+工具调用 ：在远程服务器上执行工具，并将结果转换为 UIMessagePart 格式 
+web-ui/app/components/input/mcp-picker.tsx
+25
+界面配置 ：Web 界面包含一个 McpPickerButton，用于为当前助手启用或禁用特定的 MCP 服务器和工具 
+web-ui/app/components/input/chat-input.tsx
+25
+来源： 
+web-ui/app/components/input/chat-input.tsx
+25
+ 
+web-ui/app/locales/en-US/input.json
+2-9
+ 
+gradle/libs.versions.toml
+49

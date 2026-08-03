@@ -79,6 +79,10 @@ class ChatViewModel(
     private var splitEnd: String = AppPreferences.DEFAULT_SPLIT_END
     private var bubbleDelayMinMs: Long = AppPreferences.DEFAULT_BUBBLE_DELAY_MIN.toLong()
     private var bubbleDelayMaxMs: Long = AppPreferences.DEFAULT_BUBBLE_DELAY_MAX.toLong()
+    private var autoFormatPromptEnabled: Boolean = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT
+    private var autoFormatPromptText: String = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT_TEXT
+    /** True once this conversation has at least one user-sent message (AI messages don't count). */
+    private var hasUserMessage = false
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -104,6 +108,8 @@ class ChatViewModel(
             splitEnd = appPreferences.splitEndDelimiter.first()
             bubbleDelayMinMs = appPreferences.bubbleDelayMinMs.first().toLong()
             bubbleDelayMaxMs = appPreferences.bubbleDelayMaxMs.first().toLong()
+            autoFormatPromptEnabled = appPreferences.autoFormatPrompt.first()
+            autoFormatPromptText = appPreferences.autoFormatPromptText.first()
             val sendMode = appPreferences.sendMode.first()
             val avatarMode = appPreferences.avatarMode.first()
             val animScale = appPreferences.bubbleAnimScaleFrom.first()
@@ -125,6 +131,7 @@ class ChatViewModel(
             // doesn't reload from scratch with a spinner.
             val cached = conversationRepository.getCachedConversation(id)
             if (cached != null) {
+                hasUserMessage = cached.messages.any { it.role == Message.ROLE_USER }
                 val conv = enrichConversation(cached.conversation)
                 _uiState.update {
                     it.copy(conversation = conv, messages = splitMessages(cached.messages), isStreaming = false)
@@ -137,6 +144,7 @@ class ChatViewModel(
                     connectionMonitor.reportSuccess()
                     refreshQueuedCount()
                     hasPendingSend = false
+                    hasUserMessage = data.messages.any { it.role == Message.ROLE_USER }
                     val conv = enrichConversation(data.conversation)
                     val serverSplit = splitMessages(data.messages)
                     _uiState.update { state ->
@@ -158,11 +166,25 @@ class ChatViewModel(
                     startConversationStream()
                 }
                 .onFailure { e ->
-                    connectionMonitor.reportFailure()
-                    if (_uiState.value.messages.isEmpty()) {
-                        _uiState.update { it.copy(error = e.message ?: "加载对话失败") }
+                    if (ConversationVisibility.isNewConversation(id)) {
+                        // A conversation created by the app's "new chat" button — it doesn't
+                        // exist on the server yet. Show an empty chat ready for the first message.
+                        ConversationVisibility.clearNewConversation(id)
+                        hasUserMessage = false
+                        _uiState.update {
+                            it.copy(
+                                conversation = Conversation(id = id, title = "新会话"),
+                                messages = emptyList(),
+                                error = null
+                            )
+                        }
                     } else {
-                        _uiState.update { it.copy(error = "服务器离线，已显示本地缓存") }
+                        connectionMonitor.reportFailure()
+                        if (_uiState.value.messages.isEmpty()) {
+                            _uiState.update { it.copy(error = e.message ?: "加载对话失败") }
+                        } else {
+                            _uiState.update { it.copy(error = "服务器离线，已显示本地缓存") }
+                        }
                     }
                 }
         }
@@ -210,7 +232,18 @@ class ChatViewModel(
         }
         hasPendingSend = true
 
-        val packedMessage = bubbles.joinToString("") { "$splitStart$it$splitEnd" }
+        val needsFormatPrompt = autoFormatPromptEnabled && !hasUserMessage
+        val packedMessage = if (needsFormatPrompt) {
+            // New conversation with no user message yet: teach the AI the bubble format.
+            // {start}/{end} placeholders are substituted with the configured delimiters.
+            val prompt = autoFormatPromptText
+                .replace("{start}", splitStart)
+                .replace("{end}", splitEnd)
+            "$prompt\n${bubbles.joinToString("") { "$splitStart$it$splitEnd" }}"
+        } else {
+            bubbles.joinToString("") { "$splitStart$it$splitEnd" }
+        }
+        hasUserMessage = true
         viewModelScope.launch {
             try {
                 // 1. Send message (202 Accepted)
@@ -371,7 +404,9 @@ class ChatViewModel(
                             }
                             else -> {
                                 // Send confirmed but reply not finished yet — keep waiting.
-                                _uiState.update { it.copy(isStreaming = true) }
+                                if (hasPendingSend) {
+                                    _uiState.update { it.copy(isStreaming = true) }
+                                }
                             }
                         }
                     }
@@ -457,9 +492,20 @@ class ChatViewModel(
      */
     private fun splitMessages(messages: List<Message>): List<Message> {
         return messages.flatMap { msg ->
-            MessageSplitter.split(msg.content, splitStart, splitEnd)
+            val content = if (msg.role == Message.ROLE_USER) stripFormatPrompt(msg.content) else msg.content
+            MessageSplitter.split(content, splitStart, splitEnd)
                 .mapIndexed { i, c -> msg.copy(id = "${msg.id}-$i", content = c) }
         }
+    }
+
+    /**
+     * The auto-format prompt is prepended to the first user message on the server, but it must
+     * never be shown in the chat — strip it before splitting/displaying.
+     */
+    private fun stripFormatPrompt(text: String): String {
+        if (autoFormatPromptText.isBlank()) return text
+        val prompt = autoFormatPromptText.replace("{start}", splitStart).replace("{end}", splitEnd)
+        return if (text.startsWith(prompt)) text.removePrefix(prompt).removePrefix("\n") else text
     }
 
     private fun partsToText(msg: MessageDto): String {
@@ -479,7 +525,9 @@ class ChatViewModel(
         return conv.copy(
             customAvatarUri = c.avatarUri,
             customEmoji = c.avatarEmoji,
-            customNickname = c.nickname
+            customNickname = c.nickname,
+            chatBackgroundUri = c.chatBackgroundUri,
+            chatBackgroundColor = c.chatBackgroundColor
         )
     }
 

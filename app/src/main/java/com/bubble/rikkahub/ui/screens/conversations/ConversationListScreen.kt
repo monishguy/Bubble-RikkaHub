@@ -1,5 +1,9 @@
 package com.bubble.rikkahub.ui.screens.conversations
 
+import android.content.Intent
+import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
@@ -7,6 +11,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.PushPin
 import androidx.compose.material.icons.filled.Warning
@@ -15,12 +20,16 @@ import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bubble.rikkahub.data.ConversationVisibility
+import com.bubble.rikkahub.domain.model.AssistantInfo
 import com.bubble.rikkahub.domain.model.Conversation
 import com.bubble.rikkahub.domain.model.ListTheme
 import com.bubble.rikkahub.ui.components.BubbleAvatar
+import java.util.UUID
 
 @OptIn(ExperimentalMaterial3Api::class, ExperimentalFoundationApi::class)
 @Composable
@@ -36,7 +45,76 @@ fun ConversationListScreen(
     val isSwitchingAssistant by viewModel.isSwitchingAssistant.collectAsStateWithLifecycle()
     val isOffline by viewModel.isOffline.collectAsStateWithLifecycle()
     val unreadCounts by viewModel.unreadCounts.collectAsStateWithLifecycle()
+    val assistantError by viewModel.assistantError.collectAsStateWithLifecycle()
+    val snackbarHostState = remember { SnackbarHostState() }
+    LaunchedEffect(assistantError) {
+        assistantError?.let {
+            snackbarHostState.showSnackbar(it)
+            viewModel.clearAssistantError()
+        }
+    }
     var deleteTarget by remember { mutableStateOf<Conversation?>(null) }
+
+    // Assistant customization dialog state
+    val context = LocalContext.current
+    var customizingAssistant by remember { mutableStateOf<AssistantInfo?>(null) }
+    var editAsstNickname by remember { mutableStateOf("") }
+    var editAsstEmoji by remember { mutableStateOf("") }
+    var editAsstAvatar by remember { mutableStateOf<Uri?>(null) }
+    val asstImagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            editAsstAvatar = uri
+        }
+    }
+
+    customizingAssistant?.let { asst ->
+        AlertDialog(
+            onDismissRequest = { customizingAssistant = null },
+            title = { Text("自定义助手「${asst.displayName}」") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    OutlinedTextField(
+                        value = editAsstNickname,
+                        onValueChange = { editAsstNickname = it },
+                        label = { Text("名称") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    OutlinedTextField(
+                        value = editAsstEmoji,
+                        onValueChange = { editAsstEmoji = it.take(2) },
+                        label = { Text("Emoji 头像") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Button(onClick = { asstImagePicker.launch("image/*") }) {
+                        Text(if (editAsstAvatar != null) "已选择图片 ✓" else "选择头像图片")
+                    }
+                    Text(
+                        "自定义信息保存在本机，按助手 ID 关联，不会被服务器刷新覆盖。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    viewModel.saveAssistantCustomization(
+                        asst.id, editAsstNickname, editAsstEmoji, editAsstAvatar?.toString()
+                    )
+                    customizingAssistant = null
+                }) { Text("保存") }
+            },
+            dismissButton = {
+                TextButton(onClick = { customizingAssistant = null }) { Text("取消") }
+            }
+        )
+    }
 
     deleteTarget?.let { conv ->
         AlertDialog(
@@ -52,7 +130,8 @@ fun ConversationListScreen(
         )
     }
 
-    Column(modifier = modifier.fillMaxSize()) {
+    Box(modifier = modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
         TopAppBar(
             title = { Text("聊天") },
             actions = {
@@ -61,7 +140,13 @@ fun ConversationListScreen(
                     assistants = assistants,
                     isSwitching = isSwitchingAssistant,
                     onSwitch = viewModel::switchAssistant,
-                    onRefresh = viewModel::load
+                    onRefresh = viewModel::load,
+                    onCustomizeAssistant = { asst ->
+                        customizingAssistant = asst
+                        editAsstNickname = asst.name
+                        editAsstEmoji = asst.avatarEmoji ?: ""
+                        editAsstAvatar = null
+                    }
                 )
             }
         )
@@ -139,6 +224,21 @@ fun ConversationListScreen(
                     }
                 }
             }
+        }
+        }
+        SnackbarHost(hostState = snackbarHostState, modifier = Modifier.align(Alignment.BottomCenter))
+        // New conversation: opens an empty chat whose first message creates it on the server.
+        FloatingActionButton(
+            onClick = {
+                val newId = UUID.randomUUID().toString()
+                ConversationVisibility.markAsNewConversation(newId)
+                onConversationClick(newId)
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(16.dp)
+        ) {
+            Icon(Icons.Filled.Add, contentDescription = "新建会话")
         }
     }
 }

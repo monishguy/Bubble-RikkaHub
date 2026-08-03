@@ -33,6 +33,8 @@ data class SettingsUiState(
     val bubbleAnimDurationMs: Int = AppPreferences.DEFAULT_BUBBLE_ANIM_DURATION,
     val bubbleAnimBounce: Boolean = AppPreferences.DEFAULT_BUBBLE_ANIM_BOUNCE,
     val bubbleAnimBounciness: Int = AppPreferences.DEFAULT_BUBBLE_ANIM_BOUNCINESS,
+    val autoFormatPrompt: Boolean = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT,
+    val autoFormatPromptText: String = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT_TEXT,
     val isSaving: Boolean = false,
     val serverUrlError: String? = null,
     // "Me" profile (user's own avatar/nickname)
@@ -77,7 +79,9 @@ class SettingsViewModel(
                 preferences.bubbleAnimScaleFrom,
                 preferences.bubbleAnimDurationMs,
                 preferences.bubbleAnimBounce,
-                preferences.bubbleAnimBounciness
+                preferences.bubbleAnimBounciness,
+                preferences.autoFormatPrompt,
+                preferences.autoFormatPromptText
             ) { values ->
                 SettingsUiState(
                     serverUrl = values[0] as String,
@@ -93,7 +97,9 @@ class SettingsViewModel(
                     bubbleAnimScaleFrom = values[10] as Float,
                     bubbleAnimDurationMs = values[11] as Int,
                     bubbleAnimBounce = values[12] as Boolean,
-                    bubbleAnimBounciness = values[13] as Int
+                    bubbleAnimBounciness = values[13] as Int,
+                    autoFormatPrompt = values[14] as Boolean,
+                    autoFormatPromptText = values[15] as String
                 )
             }.collect { state ->
                 // Preserve the "me" profile fields set by the local load / user edits.
@@ -187,6 +193,21 @@ class SettingsViewModel(
         viewModelScope.launch { preferences.setBubbleAnimBounciness(v) }
     }
 
+    fun onAutoFormatPromptChanged(enabled: Boolean) {
+        _uiState.update { it.copy(autoFormatPrompt = enabled) }
+        viewModelScope.launch { preferences.setAutoFormatPrompt(enabled) }
+    }
+
+    fun onAutoFormatPromptTextChanged(text: String) {
+        _uiState.update { it.copy(autoFormatPromptText = text) }
+        viewModelScope.launch { preferences.setAutoFormatPromptText(text) }
+    }
+
+    fun resetAutoFormatPromptText() {
+        _uiState.update { it.copy(autoFormatPromptText = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT_TEXT) }
+        viewModelScope.launch { preferences.resetAutoFormatPromptText() }
+    }
+
     fun onMeNicknameChanged(value: String) {
         _uiState.update { it.copy(meNickname = value) }
     }
@@ -231,6 +252,8 @@ class SettingsViewModel(
                 bubbleAnimDurationMs = s.bubbleAnimDurationMs,
                 bubbleAnimBounce = s.bubbleAnimBounce,
                 bubbleAnimBounciness = s.bubbleAnimBounciness,
+                autoFormatPrompt = s.autoFormatPrompt,
+                autoFormatPromptText = s.autoFormatPromptText,
                 meNickname = s.meNickname,
                 meEmoji = s.meEmoji,
                 meAvatarUri = s.meAvatarUri
@@ -263,6 +286,8 @@ class SettingsViewModel(
             preferences.setBubbleAnimDurationMs(config.bubbleAnimDurationMs)
             preferences.setBubbleAnimBounce(config.bubbleAnimBounce)
             preferences.setBubbleAnimBounciness(config.bubbleAnimBounciness)
+            preferences.setAutoFormatPrompt(config.autoFormatPrompt)
+            preferences.setAutoFormatPromptText(config.autoFormatPromptText)
             customizationRepository.setSelfNickname(config.meNickname.ifBlank { null })
             customizationRepository.setSelfEmoji(config.meEmoji.ifBlank { null })
             customizationRepository.setSelfAvatar(config.meAvatarUri)

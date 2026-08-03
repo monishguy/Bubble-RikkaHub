@@ -71,7 +71,9 @@ class AppContainer(private val application: Application) {
             }
             defaultRequest { url(baseUrl.trimEnd('/')); contentType(ContentType.Application.Json) }
         }
-        return RikkaHubApi(client)
+        // SSE streams are read with a plain HttpURLConnection (Ktor's CIO engine hangs on
+        // streaming responses in this app), so the API only needs the main client + base URL.
+        return RikkaHubApi(client, baseUrl)
     }
 
     val conversationRepository by lazy { ConversationRepository(api, cachedConversationDao) }

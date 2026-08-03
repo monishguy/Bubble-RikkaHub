@@ -62,6 +62,11 @@ class ConversationListViewModel(
     private val _isSwitchingAssistant = MutableStateFlow(false)
     val isSwitchingAssistant: StateFlow<Boolean> = _isSwitchingAssistant.asStateFlow()
 
+    private val _assistantError = MutableStateFlow<String?>(null)
+    val assistantError: StateFlow<String?> = _assistantError.asStateFlow()
+
+    fun clearAssistantError() { _assistantError.value = null }
+
     // ── Offline state (drives the red banner) ──
     private val _isOffline = MutableStateFlow(false)
     val isOffline: StateFlow<Boolean> = _isOffline.asStateFlow()
@@ -139,27 +144,63 @@ class ConversationListViewModel(
         }
     }
 
-    private fun handleSettingsFrame(data: String?) {
+    private suspend fun handleSettingsFrame(data: String?) {
         if (data.isNullOrBlank()) return
-        runCatching { json.decodeFromString<SettingsDto>(data) }
-            .onSuccess { applySettings(it) }
-            .onFailure { Log.w(TAG, "解析 settings 事件失败: ${it.message}") }
+        val settings = runCatching { json.decodeFromString<SettingsDto>(data) }.getOrNull()
+        if (settings != null) {
+            applySettings(settings)
+        } else {
+            Log.w(TAG, "解析 settings 事件失败")
+        }
     }
 
-    private fun applySettings(settings: SettingsDto) {
+    private suspend fun applySettings(settings: SettingsDto) {
         _assistants.value = settings.assistants.mapNotNull { a ->
             val id = a.id ?: return@mapNotNull null
+            // Local customization (set by the user, keyed by assistant id) overrides the server.
+            val custom = customizationRepository.getAssistantCustomization(id)
             AssistantInfo(
                 id = id,
-                name = a.name ?: "",
-                // The upstream avatar URL is a file:// URI inside the RikkaHub app's sandbox,
-                // which this app cannot read — only accept http(s) URLs, else fall back.
-                avatarUrl = a.avatar?.url?.takeIf { it.startsWith("http", ignoreCase = true) },
-                avatarEmoji = a.avatar?.content?.takeIf { it.isNotBlank() }
+                name = custom?.nickname ?: a.name ?: "",
+                avatarUrl = custom?.avatarUri
+                    ?: a.avatar?.url?.takeIf { it.startsWith("http", ignoreCase = true) },
+                avatarEmoji = custom?.avatarEmoji ?: a.avatar?.content?.takeIf { it.isNotBlank() }
             )
         }
         _currentAssistant.value = _assistants.value.firstOrNull { it.id == settings.assistantId }
         Log.d(TAG, "助手列表已更新: ${_assistants.value.size} 个，当前=${_currentAssistant.value?.name}")
+    }
+
+    /** Saves the user's custom avatar/name for an assistant (stored locally by assistant id). */
+    fun saveAssistantCustomization(id: String, nickname: String, emoji: String, avatarUri: String?) {
+        viewModelScope.launch {
+            customizationRepository.setAssistantNickname(id, nickname.ifBlank { null })
+            customizationRepository.setAssistantEmoji(id, emoji.ifBlank { null })
+            customizationRepository.setAssistantAvatar(id, avatarUri)
+            // Refresh the assistant list to reflect the new customization.
+            if (_assistants.value.isEmpty()) {
+                refreshAssistantSettingsFromServer()
+            } else {
+                // Re-derive from the last settings if available; otherwise just re-map.
+                val cur = _assistants.value
+                _assistants.value = cur.map {
+                    if (it.id == id) {
+                        it.copy(
+                            name = nickname.ifBlank { it.name },
+                            avatarUrl = avatarUri ?: it.avatarUrl,
+                            avatarEmoji = emoji.ifBlank { it.avatarEmoji }
+                        )
+                    } else it
+                }
+                _currentAssistant.value = _assistants.value.firstOrNull { it.id == _currentAssistant.value?.id }
+            }
+        }
+    }
+
+    private suspend fun refreshAssistantSettingsFromServer() {
+        conversationRepository.getSettings()
+            .onSuccess { applySettings(it) }
+            .onFailure { Log.w(TAG, "兜底拉取助手列表失败: ${it.message}") }
     }
 
     private fun debounceRefresh() {
@@ -202,12 +243,20 @@ class ConversationListViewModel(
     fun switchAssistant(id: String) {
         viewModelScope.launch {
             _isSwitchingAssistant.value = true
+            _assistantError.value = null
             conversationRepository.switchAssistant(id)
                 .onSuccess {
+                    _isSwitchingAssistant.value = false
+                    // Reflect the new assistant in the top bar immediately, before the
+                    // settings SSE event arrives.
+                    _currentAssistant.value = _assistants.value.firstOrNull { it.id == id }
+                    // The conversation set changed — reset unread baselines.
+                    lastObservedUpdateAt.clear()
                     loadConversations()
                 }
-                .onFailure {
+                .onFailure { e ->
                     _isSwitchingAssistant.value = false
+                    _assistantError.value = e.message ?: "切换助手失败"
                 }
         }
     }
@@ -239,9 +288,7 @@ class ConversationListViewModel(
         // Fallback: if the live /api/events connection hasn't populated the assistant list yet,
         // fetch the settings directly once.
         if (_assistants.value.isEmpty()) {
-            conversationRepository.getSettings()
-                .onSuccess { applySettings(it) }
-                .onFailure { }
+            refreshAssistantSettingsFromServer()
         }
 
         _isSwitchingAssistant.value = false

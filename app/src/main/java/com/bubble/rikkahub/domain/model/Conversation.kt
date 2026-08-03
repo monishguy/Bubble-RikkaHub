@@ -11,7 +11,10 @@ data class Conversation(
     val customEmoji: String? = null,
     val customNickname: String? = null,
     /** Last bubble message from the local cache, shown as a one-line preview in the list. */
-    val lastMessagePreview: String? = null
+    val lastMessagePreview: String? = null,
+    /** Custom chat background: image URI or ARGB color (stored locally). */
+    val chatBackgroundUri: String? = null,
+    val chatBackgroundColor: Long? = null
 ) {
     /** Effective display name: custom override > API title */
     val displayName: String get() = customNickname ?: title

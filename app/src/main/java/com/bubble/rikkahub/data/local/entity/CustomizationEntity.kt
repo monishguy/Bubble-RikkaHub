@@ -9,5 +9,7 @@ data class CustomizationEntity(
     val conversationId: String,
     val avatarUri: String? = null,
     val avatarEmoji: String? = null,
-    val nickname: String? = null
+    val nickname: String? = null,
+    val chatBackgroundUri: String? = null,
+    val chatBackgroundColor: Long? = null
 )

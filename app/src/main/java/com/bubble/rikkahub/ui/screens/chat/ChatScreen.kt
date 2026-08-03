@@ -1,6 +1,7 @@
 package com.bubble.rikkahub.ui.screens.chat
 
 import android.net.Uri
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.material.icons.Icons
@@ -9,7 +10,10 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.bubble.rikkahub.data.repository.CustomizationRepository
 import com.bubble.rikkahub.ui.screens.chat.components.BubbleList
@@ -50,7 +54,7 @@ fun ChatScreen(
     val conv = state.conversation
 
     // Save customization when the info screen's save button is pressed
-    fun saveCustomization(nickname: String, emojiText: String, newAvatar: Uri?) {
+    fun saveCustomization(nickname: String, emojiText: String, newAvatar: Uri?, bgUri: String?, bgColor: Long?) {
         if (newAvatar != null) avatarUri = newAvatar
         val convId = conversationId
         coroutineScope.launch {
@@ -59,6 +63,8 @@ fun ChatScreen(
             if (newAvatar != null) {
                 customizationRepository.setAvatar(convId, newAvatar.toString())
             }
+            customizationRepository.setChatBackground(convId, bgUri)
+            customizationRepository.setChatBackgroundColor(convId, bgColor)
             showCustomize = false
             viewModel.loadConversation(convId)
         }
@@ -71,7 +77,9 @@ fun ChatScreen(
             customAvatarUri = avatarUri?.toString() ?: conv?.customAvatarUri,
             customEmoji = conv?.customEmoji,
             customNickname = conv?.customNickname,
-            onSave = { n, e, uri -> saveCustomization(n, e, uri) },
+            customBgUri = conv?.chatBackgroundUri,
+            customBgColor = conv?.chatBackgroundColor,
+            onSave = { n, e, uri, bg, bc -> saveCustomization(n, e, uri, bg, bc) },
             onClose = { showCustomize = false }
         )
     }
@@ -136,28 +144,50 @@ fun ChatScreen(
                 }
             }
             else -> {
-                BubbleList(
-                    messages = state.messages,
-                    avatarMode = state.avatarMode,
-                    avatarUri = avatarUri?.toString() ?: conv?.customAvatarUri,
-                    emoji = conv?.customEmoji,
-                    avatarUrl = conv?.avatarUrl,
-                    displayName = displayName,
-                    meAvatarUri = meProfile?.avatarUri,
-                    meEmoji = meProfile?.avatarEmoji,
-                    meDisplayName = meProfile?.nickname ?: "我",
-                    isStreaming = state.isStreaming,
-                    streamingMessageId = null,
-                    bubbleAnimScaleFrom = state.bubbleAnimScaleFrom,
-                    bubbleAnimDurationMs = state.bubbleAnimDurationMs,
-                    bubbleAnimBounce = state.bubbleAnimBounce,
-                    bubbleAnimBounciness = state.bubbleAnimBounciness,
-                    // No imePadding here: the ChatInputBar already lifts above the keyboard,
-                    // and the Scaffold shrinks the list accordingly. Double imePadding caused
-                    // a big black/blank gap when the keyboard opened.
-                    modifier = Modifier.fillMaxSize().padding(padding)
-                )
+                ChatBackground(
+                    uri = conv?.chatBackgroundUri,
+                    color = conv?.chatBackgroundColor
+                ) {
+                    BubbleList(
+                        messages = state.messages,
+                        avatarMode = state.avatarMode,
+                        avatarUri = avatarUri?.toString() ?: conv?.customAvatarUri,
+                        emoji = conv?.customEmoji,
+                        avatarUrl = conv?.avatarUrl,
+                        displayName = displayName,
+                        meAvatarUri = meProfile?.avatarUri,
+                        meEmoji = meProfile?.avatarEmoji,
+                        meDisplayName = meProfile?.nickname ?: "我",
+                        isStreaming = state.isStreaming,
+                        streamingMessageId = null,
+                        bubbleAnimScaleFrom = state.bubbleAnimScaleFrom,
+                        bubbleAnimDurationMs = state.bubbleAnimDurationMs,
+                        bubbleAnimBounce = state.bubbleAnimBounce,
+                        bubbleAnimBounciness = state.bubbleAnimBounciness,
+                        // No imePadding here: the ChatInputBar already lifts above the keyboard,
+                        // and the Scaffold shrinks the list accordingly. Double imePadding caused
+                        // a big black/blank gap when the keyboard opened.
+                        modifier = Modifier.fillMaxSize().padding(padding)
+                    )
+                }
             }
         }
+    }
+}
+
+/** Renders a custom chat background (image or solid color) behind the bubbles. */
+@Composable
+private fun ChatBackground(uri: String?, color: Long?, content: @Composable () -> Unit) {
+    Box(modifier = Modifier.fillMaxSize()) {
+        when {
+            !uri.isNullOrBlank() -> AsyncImage(
+                model = uri,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize()
+            )
+            color != null -> Box(Modifier.fillMaxSize().background(Color(color)))
+        }
+        content()
     }
 }

@@ -318,6 +318,37 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // --- Auto Format Prompt ---
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("新对话自动添加格式提示词", style = MaterialTheme.typography.titleMedium)
+                    Text(
+                        "新对话的首条用户消息前自动加上“此后，你必须以#文本一*#文本二*.....的格式回复”（使用你设置的分隔符）。仅当会话中还没有任何用户消息时生效。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+                Switch(
+                    checked = state.autoFormatPrompt,
+                    onCheckedChange = { viewModel.onAutoFormatPromptChanged(it) }
+                )
+            }
+            OutlinedTextField(
+                value = state.autoFormatPromptText,
+                onValueChange = { viewModel.onAutoFormatPromptTextChanged(it) },
+                label = { Text("首句提示词") },
+                supportingText = { Text("{start} 与 {end} 会在发送时自动替换为你设置的分隔符") },
+                minLines = 2,
+                modifier = Modifier.fillMaxWidth()
+            )
+            TextButton(onClick = { viewModel.resetAutoFormatPromptText() }) { Text("恢复默认") }
+
+            HorizontalDivider()
+
             // --- Auto Refresh Interval ---
             Text("自动刷新间隔", style = MaterialTheme.typography.titleMedium)
             Text(

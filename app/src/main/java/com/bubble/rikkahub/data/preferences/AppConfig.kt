@@ -19,6 +19,8 @@ data class AppConfig(
     val bubbleAnimDurationMs: Int = AppPreferences.DEFAULT_BUBBLE_ANIM_DURATION,
     val bubbleAnimBounce: Boolean = AppPreferences.DEFAULT_BUBBLE_ANIM_BOUNCE,
     val bubbleAnimBounciness: Int = AppPreferences.DEFAULT_BUBBLE_ANIM_BOUNCINESS,
+    val autoFormatPrompt: Boolean = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT,
+    val autoFormatPromptText: String = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT_TEXT,
     // "Me" profile
     val meNickname: String = "",
     val meEmoji: String = "",

@@ -19,7 +19,7 @@ import com.bubble.rikkahub.data.local.entity.PendingMessageEntity
         CachedConversationEntity::class,
         PendingMessageEntity::class
     ],
-    version = 3
+    version = 4
 )
 abstract class AppDatabase : RoomDatabase() {
 
@@ -57,12 +57,19 @@ abstract class AppDatabase : RoomDatabase() {
             }
         }
 
+        private val MIGRATION_3_4 = object : Migration(3, 4) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL("ALTER TABLE `customizations` ADD COLUMN `chatBackgroundUri` TEXT")
+                db.execSQL("ALTER TABLE `customizations` ADD COLUMN `chatBackgroundColor` INTEGER")
+            }
+        }
+
         fun build(context: Context): AppDatabase {
             return Room.databaseBuilder(
                 context.applicationContext,
                 AppDatabase::class.java,
                 "bubble_rikkahub.db"
-            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3).build()
+            ).addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4).build()
         }
     }
 }

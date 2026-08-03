@@ -5,8 +5,11 @@ import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -16,6 +19,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -25,6 +29,11 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import coil3.compose.AsyncImage
+
+private val BackgroundColors = listOf(
+    0xFFF5F5F5L, 0xFFFFE4E1L, 0xFFE3F2FDL, 0xFFE8F5E9L,
+    0xFFFFF8E1L, 0xFFF3E5F5L, 0xFFE0F7FAL, 0xFFFAFAFAL
+)
 
 /**
  * Full-screen conversation info / edit screen: large square avatar, centered name,
@@ -36,13 +45,17 @@ fun ChatInfoScreen(
     customAvatarUri: String?,
     customEmoji: String?,
     customNickname: String?,
-    onSave: (nickname: String, emoji: String, avatarUri: Uri?) -> Unit,
+    customBgUri: String? = null,
+    customBgColor: Long? = null,
+    onSave: (nickname: String, emoji: String, avatarUri: Uri?, bgUri: String?, bgColor: Long?) -> Unit,
     onClose: () -> Unit
 ) {
     val context = LocalContext.current
     var nickname by remember { mutableStateOf(customNickname ?: "") }
     var emoji by remember { mutableStateOf(customEmoji ?: "") }
     var pickedAvatarUri by remember { mutableStateOf<Uri?>(null) }
+    var bgUri by remember { mutableStateOf(customBgUri) }
+    var bgColor by remember { mutableStateOf(customBgColor) }
 
     val imagePicker = rememberLauncherForActivityResult(
         ActivityResultContracts.GetContent()
@@ -52,6 +65,18 @@ fun ChatInfoScreen(
                 uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
             )
             pickedAvatarUri = uri
+        }
+    }
+
+    val bgImagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        if (uri != null) {
+            context.contentResolver.takePersistableUriPermission(
+                uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+            )
+            bgUri = uri.toString()
+            bgColor = null
         }
     }
 
@@ -82,7 +107,7 @@ fun ChatInfoScreen(
                         style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f)
                     )
-                    TextButton(onClick = { onSave(nickname.trim(), emoji.trim(), pickedAvatarUri) }) {
+                    TextButton(onClick = { onSave(nickname.trim(), emoji.trim(), pickedAvatarUri, bgUri, bgColor) }) {
                         Text("保存")
                     }
                 }
@@ -150,6 +175,42 @@ fun ChatInfoScreen(
                         modifier = Modifier.fillMaxWidth()
                     ) {
                         Text(if (pickedAvatarUri != null) "已选择图片 ✓" else "选择头像图片")
+                    }
+                }
+
+                Spacer(Modifier.height(24.dp))
+
+                // --- Chat Background ---
+                Text("聊天背景", style = MaterialTheme.typography.titleMedium)
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = { bgImagePicker.launch("image/*") }) {
+                        Text(if (bgUri != null) "已选图片" else "选择背景图片")
+                    }
+                    OutlinedButton(onClick = { bgUri = null; bgColor = null }) {
+                        Text("清除背景")
+                    }
+                }
+                Text(
+                    "背景颜色",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    BackgroundColors.forEach { c ->
+                        val selected = bgColor == c && bgUri == null
+                        Box(
+                            modifier = Modifier
+                                .size(32.dp)
+                                .clip(CircleShape)
+                                .background(Color(c))
+                                .border(
+                                    width = if (selected) 3.dp else 1.dp,
+                                    color = if (selected) MaterialTheme.colorScheme.primary
+                                    else MaterialTheme.colorScheme.outlineVariant,
+                                    shape = CircleShape
+                                )
+                                .clickable { bgColor = c; bgUri = null }
+                        )
                     }
                 }
 

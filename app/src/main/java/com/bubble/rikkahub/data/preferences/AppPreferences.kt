@@ -33,6 +33,8 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         val KEY_BUBBLE_ANIM_DURATION = intPreferencesKey("bubble_anim_duration")
         val KEY_BUBBLE_ANIM_BOUNCE = booleanPreferencesKey("bubble_anim_bounce")
         val KEY_BUBBLE_ANIM_BOUNCINESS = intPreferencesKey("bubble_anim_bounciness")
+        val KEY_AUTO_FORMAT_PROMPT = booleanPreferencesKey("auto_format_prompt")
+        val KEY_AUTO_FORMAT_PROMPT_TEXT = stringPreferencesKey("auto_format_prompt_text")
 
         const val DEFAULT_SERVER_URL = "http://localhost:8080"
         const val DEFAULT_SPLIT_START = "#"
@@ -48,6 +50,9 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         const val DEFAULT_BUBBLE_ANIM_DURATION = 400
         const val DEFAULT_BUBBLE_ANIM_BOUNCE = true
         const val DEFAULT_BUBBLE_ANIM_BOUNCINESS = 60
+        const val DEFAULT_AUTO_FORMAT_PROMPT = true
+        const val DEFAULT_AUTO_FORMAT_PROMPT_TEXT =
+            "这是格式要求说明，请勿回复该说明本身：后续每次回复，你都必须用 {start}内容{end} 包裹每一条消息，每个 {start}...{end} 视为一条独立消息。请忽略本条说明，直接开始对话，回复用户的发言。"
 
         const val SERVER_URL_MIN_LENGTH = 5
     }
@@ -111,6 +116,14 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         prefs[KEY_BUBBLE_ANIM_BOUNCINESS] ?: DEFAULT_BUBBLE_ANIM_BOUNCINESS
     }
 
+    val autoFormatPrompt: Flow<Boolean> = dataStore.data.map { prefs ->
+        prefs[KEY_AUTO_FORMAT_PROMPT] ?: DEFAULT_AUTO_FORMAT_PROMPT
+    }
+
+    val autoFormatPromptText: Flow<String> = dataStore.data.map { prefs ->
+        prefs[KEY_AUTO_FORMAT_PROMPT_TEXT] ?: DEFAULT_AUTO_FORMAT_PROMPT_TEXT
+    }
+
     suspend fun setServerUrl(url: String) {
         Log.d(TAG, "setServerUrl: $url")
         dataStore.edit { it[KEY_SERVER_URL] = url }
@@ -166,6 +179,18 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
 
     suspend fun setBubbleAnimBounciness(v: Int) {
         dataStore.edit { it[KEY_BUBBLE_ANIM_BOUNCINESS] = v.coerceIn(0, 100) }
+    }
+
+    suspend fun setAutoFormatPrompt(enabled: Boolean) {
+        dataStore.edit { it[KEY_AUTO_FORMAT_PROMPT] = enabled }
+    }
+
+    suspend fun setAutoFormatPromptText(text: String) {
+        dataStore.edit { it[KEY_AUTO_FORMAT_PROMPT_TEXT] = text }
+    }
+
+    suspend fun resetAutoFormatPromptText() {
+        dataStore.edit { it[KEY_AUTO_FORMAT_PROMPT_TEXT] = DEFAULT_AUTO_FORMAT_PROMPT_TEXT }
     }
 
     fun validateServerUrl(url: String): Boolean {

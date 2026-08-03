@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Intent
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
 import com.bubble.rikkahub.data.NotificationHelper
 import com.bubble.rikkahub.data.repository.CustomizationRepository
@@ -37,8 +38,15 @@ class BackgroundSyncService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        startForeground(NOTIFICATION_ID, buildKeepAliveNotification())
-        startPolling()
+        try {
+            startForeground(NOTIFICATION_ID, buildKeepAliveNotification())
+            startPolling()
+        } catch (e: Exception) {
+            // Foreground start can be rejected (Android 12+ restriction). Stop gracefully
+            // instead of crashing the whole app; background sync simply won't run.
+            Log.w(TAG, "startForeground 被拒绝，后台同步不运行", e)
+            stopSelf()
+        }
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
@@ -124,5 +132,6 @@ class BackgroundSyncService : Service() {
     private companion object {
         const val KEEPALIVE_CHANNEL_ID = "background_sync"
         const val NOTIFICATION_ID = 2001
+        const val TAG = "BackgroundSyncService"
     }
 }

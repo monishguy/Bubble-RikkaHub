@@ -14,9 +14,14 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.ArrowDownward
+import androidx.compose.material3.FloatingActionButton
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -24,7 +29,10 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.snapshotFlow
+import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -57,7 +65,9 @@ fun BubbleList(
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
+    val coroutineScope = rememberCoroutineScope()
     var hasScrolledToBottom by remember { mutableStateOf(false) }
+    var showJumpButton by remember { mutableStateOf(false) }
 
     // Build the pop-in animation from the customizable settings.
     val enterTransition = buildBubbleEnterTransition(
@@ -71,22 +81,35 @@ fun BubbleList(
     // messages added later (new replies) pop in with the configured transition.
     val initialIds = remember { messages.map { it.id }.toSet() }
 
+    // Show a "jump to bottom" button whenever the user scrolls up from the latest message.
+    LaunchedEffect(listState, messages.size) {
+        snapshotFlow {
+            listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: Int.MAX_VALUE
+        }.collect { lastVisible ->
+            showJumpButton = lastVisible < (messages.size - 1)
+        }
+    }
+
     // Auto-scroll to bottom. The first display jumps instantly (so re-entering lands on the
-    // latest message), later additions animate.
+    // latest message); later additions only auto-scroll if the user is already at the bottom.
     LaunchedEffect(messages.size, isStreaming) {
         if (messages.isNotEmpty()) {
             if (!hasScrolledToBottom) {
                 hasScrolledToBottom = true
                 listState.scrollToItem(messages.size - 1)
             } else {
-                listState.animateScrollToItem(messages.size - 1)
+                val atBottom = (listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0) >= messages.size - 1
+                if (atBottom) {
+                    listState.animateScrollToItem(messages.size - 1)
+                }
             }
         }
     }
 
+    Box(modifier = modifier.fillMaxSize()) {
     LazyColumn(
         state = listState,
-        modifier = modifier.fillMaxSize(),
+        modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(vertical = 8.dp),
         reverseLayout = false
     ) {
@@ -138,6 +161,22 @@ fun BubbleList(
                 )
             }
         }
+    }
+
+    // Jump-to-bottom button, shown while the user has scrolled up from the latest message.
+    if (showJumpButton) {
+        FloatingActionButton(
+            onClick = {
+                coroutineScope.launch { listState.animateScrollToItem(messages.size - 1) }
+            },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(12.dp)
+                .size(44.dp)
+        ) {
+            Icon(Icons.Filled.ArrowDownward, contentDescription = "跳到底部")
+        }
+    }
     }
 }
 

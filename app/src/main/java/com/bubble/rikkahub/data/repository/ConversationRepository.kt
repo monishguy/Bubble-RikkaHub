@@ -138,11 +138,18 @@ class ConversationRepository(
         }.getOrDefault(0)
     }
 
-    /** Refreshes metadata for all list items and prunes cached entries that no longer exist. */
+    /**
+     * Refreshes metadata for all list items and prunes cached entries that no longer exist.
+     * The list is assistant-scoped, so only conversations of the CURRENT assistant that are
+     * missing are deleted — other assistants' cached conversations are kept so switching back
+     * doesn't lose their cached messages.
+     */
     private suspend fun cacheListEntries(list: List<Conversation>) {
         val existing = cachedConversationDao.getAll()
+        val currentAssistantId = list.firstOrNull()?.assistantId
         val ids = list.map { it.id }.toSet()
-        existing.filter { it.conversationId !in ids }.forEach { cachedConversationDao.delete(it.conversationId) }
+        existing.filter { it.assistantId == currentAssistantId && it.conversationId !in ids }
+            .forEach { cachedConversationDao.delete(it.conversationId) }
         list.forEach { conv ->
             val cached = existing.firstOrNull { it.conversationId == conv.id }
             cachedConversationDao.upsert(

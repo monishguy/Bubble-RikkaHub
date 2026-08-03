@@ -7,13 +7,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ArrowDropDown
 import androidx.compose.material.icons.filled.Check
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -39,6 +42,7 @@ fun AssistantSwitcher(
     isSwitching: Boolean,
     onSwitch: (String) -> Unit,
     onRefresh: () -> Unit,
+    onCustomizeAssistant: (AssistantInfo) -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     var showDialog by remember { mutableStateOf(false) }
@@ -103,6 +107,14 @@ fun AssistantSwitcher(
                                         imageVector = Icons.Filled.Check,
                                         contentDescription = "当前助手",
                                         tint = MaterialTheme.colorScheme.primary
+                                    )
+                                }
+                                IconButton(onClick = { onCustomizeAssistant(assistant) }) {
+                                    Icon(
+                                        imageVector = Icons.Filled.Edit,
+                                        contentDescription = "自定义助手",
+                                        modifier = Modifier.size(18.dp),
+                                        tint = MaterialTheme.colorScheme.onSurfaceVariant
                                     )
                                 }
                             }

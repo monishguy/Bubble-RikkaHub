@@ -24,6 +24,22 @@ class CustomizationRepository(private val dao: CustomizationDao) {
 
     suspend fun setSelfNickname(nickname: String?) = setNickname(SELF_ID, nickname)
 
+    // ── Assistant customization (keyed by assistant id, prefixed to avoid collision) ──
+
+    private fun assistantKey(assistantId: String) = "assistant_$assistantId"
+
+    suspend fun getAssistantCustomization(assistantId: String): CustomizationEntity? =
+        dao.get(assistantKey(assistantId))
+
+    suspend fun setAssistantAvatar(assistantId: String, uri: String?) =
+        setAvatar(assistantKey(assistantId), uri)
+
+    suspend fun setAssistantEmoji(assistantId: String, emoji: String?) =
+        setEmoji(assistantKey(assistantId), emoji)
+
+    suspend fun setAssistantNickname(assistantId: String, nickname: String?) =
+        setNickname(assistantKey(assistantId), nickname)
+
     suspend fun setAvatar(conversationId: String, uri: String?) {
         val existing = dao.get(conversationId)
         dao.upsert(
@@ -42,6 +58,20 @@ class CustomizationRepository(private val dao: CustomizationDao) {
         val existing = dao.get(conversationId)
         dao.upsert(
             (existing ?: CustomizationEntity(conversationId)).copy(nickname = nickname)
+        )
+    }
+
+    suspend fun setChatBackground(conversationId: String, uri: String?) {
+        val existing = dao.get(conversationId)
+        dao.upsert(
+            (existing ?: CustomizationEntity(conversationId)).copy(chatBackgroundUri = uri)
+        )
+    }
+
+    suspend fun setChatBackgroundColor(conversationId: String, color: Long?) {
+        val existing = dao.get(conversationId)
+        dao.upsert(
+            (existing ?: CustomizationEntity(conversationId)).copy(chatBackgroundColor = color)
         )
     }
 

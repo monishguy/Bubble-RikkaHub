@@ -5,18 +5,14 @@ import com.bubble.rikkahub.data.remote.dto.*
 import com.bubble.rikkahub.util.SseLineParser
 import io.ktor.client.HttpClient
 import io.ktor.client.call.body
-import io.ktor.client.plugins.HttpTimeoutConfig
-import io.ktor.client.plugins.timeout
 import io.ktor.client.request.delete
 import io.ktor.client.request.get
 import io.ktor.client.request.post
 import io.ktor.client.request.setBody
 import io.ktor.client.statement.HttpResponse
-import io.ktor.client.statement.bodyAsChannel
 import io.ktor.http.ContentType
 import io.ktor.http.contentType
 import io.ktor.http.isSuccess
-import io.ktor.utils.io.readUTF8Line
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withTimeout
@@ -27,8 +23,13 @@ import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.mapNotNull
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import java.net.HttpURLConnection
+import java.net.URL
 
-class RikkaHubApi(private val client: HttpClient) {
+class RikkaHubApi(
+    private val client: HttpClient,
+    private val baseUrl: String
+) {
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
@@ -94,67 +95,56 @@ class RikkaHubApi(private val client: HttpClient) {
     // ── Streaming ───────────────────────────────────────────────
 
     /**
-     * Opens SSE stream at GET /api/conversations/{id}/stream.
-     * Events:
-     *   - "snapshot"     data = ConversationSnapshotEvent (full state)
-     *   - "node_update"  data = ConversationNodeUpdateEvent (partial update)
-     *   - "done"         data = GenerationDoneEvent
-     *   - "error"        data = ErrorEvent
+     * Shared robust SSE reader: connects with a connect-timeout guard (so a stale/pooled
+     * connection fails fast instead of hanging forever on the infinite request timeout),
+     * checks the response status, and parses frames line by line. Each received frame is
+     * logged so a broken stream is easy to diagnose.
      */
-    fun streamConversation(conversationId: String): Flow<SseFrame> = flow {
-        client.get("/api/conversations/$conversationId/stream") {
-            // SSE is a long-lived connection; the CIO engine's default request timeout
-            // (15s when HttpTimeout is unconfigured) must not kill it.
-            timeout {
-                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-                socketTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
+    /**
+     * Reads an SSE stream using a plain HttpURLConnection. Ktor's CIO client was found to hang
+     * on streaming responses in this app, so the stream is read manually here — this is
+     * reliable regardless of the Ktor engine.
+     */
+    private fun sseFlow(path: String, tag: String): Flow<SseFrame> = flow {
+        Log.d(tag, "SSE 开始连接 $path")
+        val url = URL(baseUrl.trimEnd('/') + path)
+        val conn = url.openConnection() as HttpURLConnection
+        try {
+            conn.connectTimeout = 5_000
+            conn.readTimeout = 0 // no read timeout: stream stays open
+            conn.setRequestProperty("Accept", "text/event-stream")
+            conn.instanceFollowRedirects = false
+            val status = conn.responseCode
+            Log.d(tag, "SSE 连接 $path → HTTP $status")
+            if (status !in 200..299) {
+                Log.w(tag, "SSE 连接失败 HTTP $status")
+                return@flow
             }
-        }.let { response ->
-            val channel = response.bodyAsChannel()
             val buffer = mutableListOf<String>()
-            while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
-                if (line.isBlank()) {
-                    SseLineParser.parse(buffer.toList())?.let { emit(it) }
-                    buffer.clear()
-                } else {
-                    buffer.add(line)
+            conn.inputStream.bufferedReader(Charsets.UTF_8).use { reader ->
+                while (true) {
+                    val line = reader.readLine() ?: break
+                    if (line.isBlank()) {
+                        SseLineParser.parse(buffer.toList())?.let { frame ->
+                            Log.d(tag, "SSE 收到事件: ${frame.event}")
+                            emit(frame)
+                        }
+                        buffer.clear()
+                    } else {
+                        buffer.add(line)
+                    }
                 }
             }
-            if (buffer.isNotEmpty()) {
-                SseLineParser.parse(buffer.toList())?.let { emit(it) }
-            }
+        } finally {
+            conn.disconnect()
         }
+        Log.w(tag, "SSE 流结束 ($path)")
     }.flowOn(Dispatchers.IO)
 
-    /**
-     * Opens multiplexed SSE stream at GET /api/events.
-     * Event "settings" carries the full Settings JSON including the assistants list.
-     */
-    fun streamEvents(): Flow<SseFrame> = flow {
-        client.get("/api/events") {
-            // Same long-lived SSE connection: never let the request timeout kill it.
-            timeout {
-                requestTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-                socketTimeoutMillis = HttpTimeoutConfig.INFINITE_TIMEOUT_MS
-            }
-        }.let { response ->
-            val channel = response.bodyAsChannel()
-            val buffer = mutableListOf<String>()
-            while (!channel.isClosedForRead) {
-                val line = channel.readUTF8Line() ?: break
-                if (line.isBlank()) {
-                    SseLineParser.parse(buffer.toList())?.let { emit(it) }
-                    buffer.clear()
-                } else {
-                    buffer.add(line)
-                }
-            }
-            if (buffer.isNotEmpty()) {
-                SseLineParser.parse(buffer.toList())?.let { emit(it) }
-            }
-        }
-    }.flowOn(Dispatchers.IO)
+    fun streamConversation(conversationId: String): Flow<SseFrame> =
+        sseFlow("/api/conversations/$conversationId/stream", TAG)
+
+    fun streamEvents(): Flow<SseFrame> = sseFlow("/api/events", TAG)
 
     // ── Settings / Assistant ────────────────────────────────────
 
@@ -168,17 +158,33 @@ class RikkaHubApi(private val client: HttpClient) {
     /**
      * Fetches the current Settings object (which contains the assistant list and the
      * active assistant id). There is no plain GET for settings — they are delivered as
-     * the first `settings` SSE event on GET /api/events, so we collect it and disconnect.
+     * the first `settings` SSE event on GET /api/events. Retries up to 3 times.
      */
     suspend fun getSettings(): SettingsDto {
-        return withTimeout(10_000) {
-            streamEvents()
-                .mapNotNull { frame ->
-                    if (frame.event == "settings" && frame.data != null) {
-                        runCatching { json.decodeFromString<SettingsDto>(frame.data) }.getOrNull()
-                    } else null
+        var lastError: Throwable? = null
+        repeat(3) { attempt ->
+            try {
+                val settings = withTimeout(8_000) {
+                    streamEvents()
+                        .mapNotNull { frame ->
+                            if (frame.event == "settings" && frame.data != null) {
+                                runCatching { json.decodeFromString<SettingsDto>(frame.data) }
+                                    .onFailure { e -> Log.w(TAG, "解析 settings 失败: ${e.message}") }
+                                    .getOrNull()
+                            } else null
+                        }
+                        .firstOrNull()
                 }
-                .firstOrNull()
-        } ?: throw IllegalStateException("获取服务器设置超时")
+                if (settings != null) {
+                    Log.d(TAG, "getSettings 成功（第 ${attempt + 1} 次尝试）")
+                    return settings
+                }
+                lastError = IllegalStateException("未收到 settings 事件")
+            } catch (e: Exception) {
+                lastError = e
+            }
+            Log.w(TAG, "getSettings 第 ${attempt + 1} 次尝试失败: ${lastError?.message}")
+        }
+        throw IllegalStateException("获取服务器设置失败: ${lastError?.message}")
     }
 }

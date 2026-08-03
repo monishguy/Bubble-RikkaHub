@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
@@ -25,6 +26,7 @@ class MainActivity : ComponentActivity() {
 
     /** Conversation to open when launched from a notification, if any. */
     private var pendingConversationId by mutableStateOf<String?>(null)
+    private var syncServiceStarted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -32,12 +34,6 @@ class MainActivity : ComponentActivity() {
 
         createNotificationChannel()
         requestNotificationPermission()
-
-        // Start the background sync (keep-alive) service so new messages are detected even
-        // when the app is backgrounded.
-        ContextCompat.startForegroundService(
-            this, Intent(this, BackgroundSyncService::class.java)
-        )
 
         handleIntent(intent)
 
@@ -47,6 +43,23 @@ class MainActivity : ComponentActivity() {
                     appContainer = (application as BubbleRhApp).container,
                     initialConversationId = pendingConversationId
                 )
+            }
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // Foreground services must be started while the activity is actually in the
+        // foreground. Starting them too early (onCreate) is rejected on Android 12+ and
+        // crashes the app with ForegroundServiceStartNotAllowedException.
+        if (!syncServiceStarted) {
+            syncServiceStarted = true
+            try {
+                ContextCompat.startForegroundService(
+                    this, Intent(this, BackgroundSyncService::class.java)
+                )
+            } catch (e: Exception) {
+                Log.w(TAG, "无法启动后台同步服务", e)
             }
         }
     }
@@ -84,6 +97,7 @@ class MainActivity : ComponentActivity() {
     }
 
     companion object {
+        private const val TAG = "MainActivity"
         const val UNREAD_CHANNEL_ID = "unread_messages"
         const val EXTRA_CONVERSATION_ID = "conversation_id"
     }

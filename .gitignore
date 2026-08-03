@@ -11,3 +11,7 @@ build/
 .externalNativeBuild
 .cxx
 local.properties
+
+# Signing — never commit keystore or its passwords
+app/keystore.properties
+app/keystore/

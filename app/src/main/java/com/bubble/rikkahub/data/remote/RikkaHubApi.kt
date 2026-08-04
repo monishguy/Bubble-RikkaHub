@@ -126,7 +126,10 @@ class RikkaHubApi(
                     val line = reader.readLine() ?: break
                     if (line.isBlank()) {
                         SseLineParser.parse(buffer.toList())?.let { frame ->
-                            Log.d(tag, "SSE 收到事件: ${frame.event}")
+                            // node_update fires very frequently during generation — don't log every frame.
+                            if (frame.event != "node_update") {
+                                Log.d(tag, "SSE 收到事件: ${frame.event}")
+                            }
                             emit(frame)
                         }
                         buffer.clear()

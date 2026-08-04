@@ -1,5 +1,12 @@
 package com.bubble.rikkahub.ui.navigation
 
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInHorizontally
+import androidx.compose.animation.slideOutHorizontally
 import androidx.compose.foundation.layout.calculateEndPadding
 import androidx.compose.foundation.layout.calculateStartPadding
 import androidx.compose.foundation.layout.padding
@@ -23,8 +30,10 @@ import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import com.bubble.rikkahub.data.preferences.AppPreferences
 import com.bubble.rikkahub.di.AppContainer
 import com.bubble.rikkahub.domain.model.ListTheme
+import com.bubble.rikkahub.domain.model.NavTransitionMode
 import com.bubble.rikkahub.ui.screens.chat.ChatScreen
 import com.bubble.rikkahub.ui.screens.chat.ChatViewModel
 import com.bubble.rikkahub.ui.screens.conversations.ConversationListScreen
@@ -53,9 +62,34 @@ private val bottomNavItems = listOf(
 fun MainNavGraph(appContainer: AppContainer, initialConversationId: String? = null) {
     val navController = rememberNavController()
     val listTheme by appContainer.appPreferences.listTheme.collectAsStateWithLifecycle(ListTheme.FLAT)
+    val navMode by appContainer.appPreferences.navTransitionMode
+        .collectAsStateWithLifecycle(NavTransitionMode.SLIDE)
+    val navDuration by appContainer.appPreferences.navTransitionDurationMs
+        .collectAsStateWithLifecycle(AppPreferences.DEFAULT_NAV_TRANSITION_DURATION)
     val navBackStackEntry by navController.currentBackStackEntryAsState()
     val currentRoute = navBackStackEntry?.destination?.route
     val isOnChat = currentRoute == Routes.CHAT
+
+    val enter = when (navMode) {
+        NavTransitionMode.SLIDE -> slideInHorizontally(tween(navDuration)) { it }
+        NavTransitionMode.FADE -> fadeIn(tween(navDuration))
+        NavTransitionMode.NONE -> EnterTransition.None
+    }
+    val exit = when (navMode) {
+        NavTransitionMode.SLIDE -> slideOutHorizontally(tween(navDuration)) { -it / 3 }
+        NavTransitionMode.FADE -> fadeOut(tween(navDuration))
+        NavTransitionMode.NONE -> ExitTransition.None
+    }
+    val popEnter = when (navMode) {
+        NavTransitionMode.SLIDE -> slideInHorizontally(tween(navDuration)) { -it / 3 }
+        NavTransitionMode.FADE -> fadeIn(tween(navDuration))
+        NavTransitionMode.NONE -> EnterTransition.None
+    }
+    val popExit = when (navMode) {
+        NavTransitionMode.SLIDE -> slideOutHorizontally(tween(navDuration)) { it }
+        NavTransitionMode.FADE -> fadeOut(tween(navDuration))
+        NavTransitionMode.NONE -> ExitTransition.None
+    }
 
     // When launched from a notification, jump straight into the conversation.
     LaunchedEffect(initialConversationId) {
@@ -104,7 +138,11 @@ fun MainNavGraph(appContainer: AppContainer, initialConversationId: String? = nu
                 start = innerPadding.calculateStartPadding(LocalLayoutDirection.current),
                 end = innerPadding.calculateEndPadding(LocalLayoutDirection.current),
                 bottom = innerPadding.calculateBottomPadding()
-            )
+            ),
+            enterTransition = { enter },
+            exitTransition = { exit },
+            popEnterTransition = { popEnter },
+            popExitTransition = { popExit }
         ) {
             composable(Routes.CONVERSATIONS) {
                 val listViewModel: ConversationListViewModel = viewModel(

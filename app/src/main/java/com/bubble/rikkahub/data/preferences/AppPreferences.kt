@@ -8,11 +8,17 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.floatPreferencesKey
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.bubble.rikkahub.domain.model.AssistantInfo
 import com.bubble.rikkahub.domain.model.AvatarMode
 import com.bubble.rikkahub.domain.model.ListTheme
+import com.bubble.rikkahub.domain.model.NavTransitionMode
 import com.bubble.rikkahub.domain.model.SendMode
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
+import kotlinx.serialization.decodeFromString
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.Json
 
 class AppPreferences(private val dataStore: DataStore<Preferences>) {
 
@@ -35,6 +41,12 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         val KEY_BUBBLE_ANIM_BOUNCINESS = intPreferencesKey("bubble_anim_bounciness")
         val KEY_AUTO_FORMAT_PROMPT = booleanPreferencesKey("auto_format_prompt")
         val KEY_AUTO_FORMAT_PROMPT_TEXT = stringPreferencesKey("auto_format_prompt_text")
+        val KEY_NAV_TRANSITION_MODE = stringPreferencesKey("nav_transition_mode")
+        val KEY_NAV_TRANSITION_DURATION = intPreferencesKey("nav_transition_duration")
+        // Last-known assistant list + active assistant, cached so the switcher and the
+        // per-assistant conversation filter still work while the server is unreachable.
+        val KEY_CACHED_ASSISTANTS = stringPreferencesKey("cached_assistants")
+        val KEY_CACHED_CURRENT_ASSISTANT_ID = stringPreferencesKey("cached_current_assistant_id")
 
         const val DEFAULT_SERVER_URL = "http://localhost:8080"
         const val DEFAULT_SPLIT_START = "#"
@@ -53,6 +65,8 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         const val DEFAULT_AUTO_FORMAT_PROMPT = true
         const val DEFAULT_AUTO_FORMAT_PROMPT_TEXT =
             "这是格式要求说明，请勿回复该说明本身：后续每次回复，你都必须用 {start}内容{end} 包裹每一条消息，每个 {start}...{end} 视为一条独立消息。请忽略本条说明，直接开始对话，回复用户的发言。"
+        const val DEFAULT_NAV_TRANSITION_MODE = "SLIDE"
+        const val DEFAULT_NAV_TRANSITION_DURATION = 300
 
         const val SERVER_URL_MIN_LENGTH = 5
     }
@@ -124,6 +138,15 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         prefs[KEY_AUTO_FORMAT_PROMPT_TEXT] ?: DEFAULT_AUTO_FORMAT_PROMPT_TEXT
     }
 
+    val navTransitionMode: Flow<NavTransitionMode> = dataStore.data.map { prefs ->
+        val mode = prefs[KEY_NAV_TRANSITION_MODE] ?: DEFAULT_NAV_TRANSITION_MODE
+        try { NavTransitionMode.valueOf(mode) } catch (_: Exception) { NavTransitionMode.SLIDE }
+    }
+
+    val navTransitionDurationMs: Flow<Int> = dataStore.data.map { prefs ->
+        prefs[KEY_NAV_TRANSITION_DURATION] ?: DEFAULT_NAV_TRANSITION_DURATION
+    }
+
     suspend fun setServerUrl(url: String) {
         Log.d(TAG, "setServerUrl: $url")
         dataStore.edit { it[KEY_SERVER_URL] = url }
@@ -189,8 +212,44 @@ class AppPreferences(private val dataStore: DataStore<Preferences>) {
         dataStore.edit { it[KEY_AUTO_FORMAT_PROMPT_TEXT] = text }
     }
 
+    suspend fun setNavTransitionMode(mode: NavTransitionMode) {
+        dataStore.edit { it[KEY_NAV_TRANSITION_MODE] = mode.name }
+    }
+
+    suspend fun setNavTransitionDurationMs(ms: Int) {
+        dataStore.edit { it[KEY_NAV_TRANSITION_DURATION] = ms.coerceIn(0, 1000) }
+    }
+
     suspend fun resetAutoFormatPromptText() {
         dataStore.edit { it[KEY_AUTO_FORMAT_PROMPT_TEXT] = DEFAULT_AUTO_FORMAT_PROMPT_TEXT }
+    }
+
+    // ── Cached assistant list (offline support) ────────────────────
+
+    private val assistantJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
+
+    /** Returns the last-known assistant list, or empty if never fetched. */
+    suspend fun getCachedAssistants(): List<AssistantInfo> {
+        val raw = dataStore.data.first()[KEY_CACHED_ASSISTANTS] ?: return emptyList()
+        return runCatching { assistantJson.decodeFromString<List<AssistantInfo>>(raw) }.getOrElse {
+            Log.w(TAG, "解析缓存的助手列表失败: ${it.message}")
+            emptyList()
+        }
+    }
+
+    suspend fun saveCachedAssistants(list: List<AssistantInfo>) {
+        dataStore.edit { it[KEY_CACHED_ASSISTANTS] = assistantJson.encodeToString(list) }
+    }
+
+    suspend fun getCachedCurrentAssistantId(): String? {
+        return dataStore.data.first()[KEY_CACHED_CURRENT_ASSISTANT_ID]
+    }
+
+    suspend fun saveCachedCurrentAssistantId(id: String?) {
+        dataStore.edit {
+            if (id.isNullOrBlank()) it.remove(KEY_CACHED_CURRENT_ASSISTANT_ID)
+            else it[KEY_CACHED_CURRENT_ASSISTANT_ID] = id
+        }
     }
 
     fun validateServerUrl(url: String): Boolean {

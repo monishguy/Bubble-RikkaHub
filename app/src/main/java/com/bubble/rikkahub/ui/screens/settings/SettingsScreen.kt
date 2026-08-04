@@ -3,6 +3,7 @@ package com.bubble.rikkahub.ui.screens.settings
 import android.content.Intent
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
@@ -15,13 +16,18 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.bubble.rikkahub.BuildConfig
 import com.bubble.rikkahub.domain.model.AvatarMode
 import com.bubble.rikkahub.domain.model.ListTheme
+import com.bubble.rikkahub.domain.model.NavTransitionMode
 import com.bubble.rikkahub.domain.model.SendMode
 import com.bubble.rikkahub.ui.components.BubbleAvatar
+
+private const val REPO_URL = "https://github.com/monishguy/Bubble-RikkaHub"
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -414,6 +420,41 @@ fun SettingsScreen(
 
             HorizontalDivider()
 
+            // --- Nav Transition ---
+            Text("界面切换动画", style = MaterialTheme.typography.titleMedium)
+            Text(
+                "切换底栏与进入/退出会话时的动画",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FilterChip(
+                    selected = state.navTransitionMode == NavTransitionMode.FADE,
+                    onClick = { viewModel.onNavTransitionModeChanged(NavTransitionMode.FADE) },
+                    label = { Text("淡入淡出") }
+                )
+                FilterChip(
+                    selected = state.navTransitionMode == NavTransitionMode.SLIDE,
+                    onClick = { viewModel.onNavTransitionModeChanged(NavTransitionMode.SLIDE) },
+                    label = { Text("堆叠右滑") }
+                )
+                FilterChip(
+                    selected = state.navTransitionMode == NavTransitionMode.NONE,
+                    onClick = { viewModel.onNavTransitionModeChanged(NavTransitionMode.NONE) },
+                    label = { Text("无动画") }
+                )
+            }
+            SliderWithIntValue(
+                label = "动画时长",
+                value = state.navTransitionDurationMs,
+                min = 0,
+                max = 800,
+                suffix = "ms",
+                onValueChange = { viewModel.onNavTransitionDurationChanged(it) }
+            )
+
+            HorizontalDivider()
+
             // --- Config export / import ---
             Text("配置管理", style = MaterialTheme.typography.titleMedium)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -426,6 +467,31 @@ fun SettingsScreen(
             }
             Text(
                 "导出为 JSON 文件，包含服务器地址、分隔符、发送/头像模式、气泡延迟和我的资料",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+
+            HorizontalDivider()
+
+            // --- About ---
+            val uriHandler = LocalUriHandler.current
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable { uriHandler.openUri(REPO_URL) }
+                    .padding(vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text("项目仓库", style = MaterialTheme.typography.bodyMedium, modifier = Modifier.weight(1f))
+                Text(
+                    "github.com/monishguy/Bubble-RikkaHub",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.primary
+                )
+            }
+            Text(
+                "版本 v${BuildConfig.VERSION_NAME}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )

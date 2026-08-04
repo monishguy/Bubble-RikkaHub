@@ -73,10 +73,19 @@ class ConversationRepository(
         )
     }
 
-    /** Returns all cached conversation list entries (title/pin/time + any cached messages). */
-    suspend fun getCachedConversations(): List<Conversation> {
-        return cachedConversationDao.getAll()
-            .map { it.toConversation() }
+    /**
+     * Returns cached conversation list entries for one assistant, or all of them when
+     * [assistantId] is null. Conversations whose assistant is unknown (null) are included
+     * in every assistant's offline list so nothing cached becomes invisible offline.
+     */
+    suspend fun getCachedConversations(assistantId: String? = null): List<Conversation> {
+        val all = cachedConversationDao.getAll()
+        val filtered = if (assistantId == null) {
+            all
+        } else {
+            all.filter { it.assistantId == assistantId || it.assistantId == null }
+        }
+        return filtered.map { it.toConversation() }
             .sortedWith(compareByDescending<Conversation> { it.isPinned }.thenByDescending { it.updatedAt })
     }
 

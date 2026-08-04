@@ -82,7 +82,8 @@ fun BubbleList(
     val initialIds = remember { messages.map { it.id }.toSet() }
 
     // Show a "jump to bottom" button whenever the user scrolls up from the latest message.
-    LaunchedEffect(listState, messages.size) {
+    // Keyed on listState only so it doesn't restart on every message addition.
+    LaunchedEffect(listState) {
         snapshotFlow {
             listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: Int.MAX_VALUE
         }.collect { lastVisible ->

@@ -4,6 +4,7 @@ import androidx.compose.foundation.text.InlineTextContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
@@ -28,9 +29,11 @@ fun MarkdownText(
     modifier: Modifier = Modifier,
     style: TextStyle = MaterialTheme.typography.bodyLarge
 ) {
-    val hasMarkdown = MARKDOWN_PATTERN.containsMatchIn(text)
+    val hasMarkdown = remember(text) { MARKDOWN_PATTERN.containsMatchIn(text) }
     val codeBg = MaterialTheme.colorScheme.surfaceVariant
     val linkColor = MaterialTheme.colorScheme.primary
+    // Memoize the markdown parse so a bubble recomposing doesn't re-parse unchanged text.
+    val annotated = remember(text, codeBg, linkColor) { buildAnnotatedMarkdown(text, codeBg, linkColor) }
 
     if (!hasMarkdown) {
         // Plain text - no markdown rendering overhead
@@ -42,7 +45,7 @@ fun MarkdownText(
         )
     } else {
         Text(
-            text = buildAnnotatedMarkdown(text, codeBg, linkColor),
+            text = annotated,
             color = color,
             style = style,
             modifier = modifier,

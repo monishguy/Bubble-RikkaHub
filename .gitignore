@@ -15,3 +15,7 @@ local.properties
 # Signing — never commit keystore or its passwords
 app/keystore.properties
 app/keystore/
+
+# Release build artifacts (only APK + changelog belong in git)
+app/release/baselineProfiles/
+app/release/output-metadata.json

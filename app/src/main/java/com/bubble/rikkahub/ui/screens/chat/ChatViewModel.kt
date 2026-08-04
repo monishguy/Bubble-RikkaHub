@@ -473,7 +473,10 @@ class ChatViewModel(
                     }
                     listOf(
                         Message(
-                            id = node.id,
+                            // CRITICAL: use the same id scheme as getConversationWithMessages
+                            // (msg.id, the variant id) so snapshot merges don't treat every
+                            // message as new and duplicate the whole history.
+                            id = active.id.ifBlank { node.id },
                             role = role,
                             content = text,
                             timestamp = TimestampParser.parse(active.createdAt)

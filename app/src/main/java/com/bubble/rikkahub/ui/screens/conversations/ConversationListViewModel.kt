@@ -79,6 +79,17 @@ class ConversationListViewModel(
     }
 
     init {
+        // Restore the last-known assistant list + active assistant so the top-bar switcher
+        // and the per-assistant conversation filter work immediately, even offline.
+        viewModelScope.launch {
+            val cached = appPreferences.getCachedAssistants()
+            if (cached.isNotEmpty() && _assistants.value.isEmpty()) {
+                _assistants.value = cached
+                val currentId = appPreferences.getCachedCurrentAssistantId()
+                _currentAssistant.value = cached.firstOrNull { it.id == currentId } ?: cached.firstOrNull()
+                Log.d(TAG, "已从本地缓存恢复助手列表: ${cached.size} 个")
+            }
+        }
         load()
         // Auto-reload when the connection comes back.
         viewModelScope.launch {
@@ -155,7 +166,7 @@ class ConversationListViewModel(
     }
 
     private suspend fun applySettings(settings: SettingsDto) {
-        _assistants.value = settings.assistants.mapNotNull { a ->
+        val resolved = settings.assistants.mapNotNull { a ->
             val id = a.id ?: return@mapNotNull null
             // Local customization (set by the user, keyed by assistant id) overrides the server.
             val custom = customizationRepository.getAssistantCustomization(id)
@@ -167,8 +178,12 @@ class ConversationListViewModel(
                 avatarEmoji = custom?.avatarEmoji ?: a.avatar?.content?.takeIf { it.isNotBlank() }
             )
         }
-        _currentAssistant.value = _assistants.value.firstOrNull { it.id == settings.assistantId }
-        Log.d(TAG, "助手列表已更新: ${_assistants.value.size} 个，当前=${_currentAssistant.value?.name}")
+        _assistants.value = resolved
+        _currentAssistant.value = resolved.firstOrNull { it.id == settings.assistantId }
+        // Persist so the switcher + per-assistant filter still work when offline.
+        appPreferences.saveCachedAssistants(resolved)
+        appPreferences.saveCachedCurrentAssistantId(settings.assistantId)
+        Log.d(TAG, "助手列表已更新: ${resolved.size} 个，当前=${_currentAssistant.value?.name}")
     }
 
     /** Saves the user's custom avatar/name for an assistant (stored locally by assistant id). */
@@ -193,6 +208,8 @@ class ConversationListViewModel(
                     } else it
                 }
                 _currentAssistant.value = _assistants.value.firstOrNull { it.id == _currentAssistant.value?.id }
+                // Keep the offline cache in sync with the local customization.
+                appPreferences.saveCachedAssistants(_assistants.value)
             }
         }
     }
@@ -244,12 +261,28 @@ class ConversationListViewModel(
         viewModelScope.launch {
             _isSwitchingAssistant.value = true
             _assistantError.value = null
+            // Offline: there's no server to switch on, so just switch the local view to that
+            // assistant's cached conversations (matched against the cached assistant list).
+            if (_isOffline.value) {
+                val target = _assistants.value.firstOrNull { it.id == id }
+                if (target != null) {
+                    _currentAssistant.value = target
+                    appPreferences.saveCachedCurrentAssistantId(id)
+                    lastObservedUpdateAt.clear()
+                    loadConversations()
+                } else {
+                    _assistantError.value = "没有找到助手「$id」的缓存信息"
+                }
+                _isSwitchingAssistant.value = false
+                return@launch
+            }
             conversationRepository.switchAssistant(id)
                 .onSuccess {
                     _isSwitchingAssistant.value = false
                     // Reflect the new assistant in the top bar immediately, before the
                     // settings SSE event arrives.
                     _currentAssistant.value = _assistants.value.firstOrNull { it.id == id }
+                    appPreferences.saveCachedCurrentAssistantId(id)
                     // The conversation set changed — reset unread baselines.
                     lastObservedUpdateAt.clear()
                     loadConversations()
@@ -276,10 +309,16 @@ class ConversationListViewModel(
             .onFailure { e ->
                 connectionMonitor.reportFailure()
                 _isOffline.value = true
-                val cached = conversationRepository.getCachedConversations()
+                // Offline cache is assistant-scoped, matching the online list: only show the
+                // current assistant's cached conversations (plus any with unknown assistant).
+                val currentId = _currentAssistant.value?.id ?: appPreferences.getCachedCurrentAssistantId()
+                val cached = conversationRepository.getCachedConversations(currentId)
                 if (cached.isNotEmpty()) {
                     val enriched = cached.map { enrich(it) }
                     _uiState.update { ConversationListUiState.Success(enriched, false) }
+                } else if (_assistants.value.isNotEmpty()) {
+                    // We know the assistants but this one has no cached conversations yet.
+                    _uiState.update { ConversationListUiState.Success(emptyList(), false) }
                 } else {
                     _uiState.update { ConversationListUiState.Error(e.message ?: "加载失败") }
                 }

@@ -7,6 +7,7 @@ import com.bubble.rikkahub.data.preferences.AppPreferences
 import com.bubble.rikkahub.data.repository.CustomizationRepository
 import com.bubble.rikkahub.domain.model.AvatarMode
 import com.bubble.rikkahub.domain.model.ListTheme
+import com.bubble.rikkahub.domain.model.NavTransitionMode
 import com.bubble.rikkahub.domain.model.SendMode
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -35,6 +36,8 @@ data class SettingsUiState(
     val bubbleAnimBounciness: Int = AppPreferences.DEFAULT_BUBBLE_ANIM_BOUNCINESS,
     val autoFormatPrompt: Boolean = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT,
     val autoFormatPromptText: String = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT_TEXT,
+    val navTransitionMode: NavTransitionMode = NavTransitionMode.SLIDE,
+    val navTransitionDurationMs: Int = AppPreferences.DEFAULT_NAV_TRANSITION_DURATION,
     val isSaving: Boolean = false,
     val serverUrlError: String? = null,
     // "Me" profile (user's own avatar/nickname)
@@ -81,7 +84,9 @@ class SettingsViewModel(
                 preferences.bubbleAnimBounce,
                 preferences.bubbleAnimBounciness,
                 preferences.autoFormatPrompt,
-                preferences.autoFormatPromptText
+                preferences.autoFormatPromptText,
+                preferences.navTransitionMode,
+                preferences.navTransitionDurationMs
             ) { values ->
                 SettingsUiState(
                     serverUrl = values[0] as String,
@@ -99,7 +104,9 @@ class SettingsViewModel(
                     bubbleAnimBounce = values[12] as Boolean,
                     bubbleAnimBounciness = values[13] as Int,
                     autoFormatPrompt = values[14] as Boolean,
-                    autoFormatPromptText = values[15] as String
+                    autoFormatPromptText = values[15] as String,
+                    navTransitionMode = values[16] as NavTransitionMode,
+                    navTransitionDurationMs = values[17] as Int
                 )
             }.collect { state ->
                 // Preserve the "me" profile fields set by the local load / user edits.
@@ -208,6 +215,16 @@ class SettingsViewModel(
         viewModelScope.launch { preferences.resetAutoFormatPromptText() }
     }
 
+    fun onNavTransitionModeChanged(mode: NavTransitionMode) {
+        _uiState.update { it.copy(navTransitionMode = mode) }
+        viewModelScope.launch { preferences.setNavTransitionMode(mode) }
+    }
+
+    fun onNavTransitionDurationChanged(ms: Int) {
+        _uiState.update { it.copy(navTransitionDurationMs = ms) }
+        viewModelScope.launch { preferences.setNavTransitionDurationMs(ms) }
+    }
+
     fun onMeNicknameChanged(value: String) {
         _uiState.update { it.copy(meNickname = value) }
     }
@@ -254,6 +271,8 @@ class SettingsViewModel(
                 bubbleAnimBounciness = s.bubbleAnimBounciness,
                 autoFormatPrompt = s.autoFormatPrompt,
                 autoFormatPromptText = s.autoFormatPromptText,
+                navTransitionMode = s.navTransitionMode.name,
+                navTransitionDurationMs = s.navTransitionDurationMs,
                 meNickname = s.meNickname,
                 meEmoji = s.meEmoji,
                 meAvatarUri = s.meAvatarUri
@@ -288,6 +307,11 @@ class SettingsViewModel(
             preferences.setBubbleAnimBounciness(config.bubbleAnimBounciness)
             preferences.setAutoFormatPrompt(config.autoFormatPrompt)
             preferences.setAutoFormatPromptText(config.autoFormatPromptText)
+            preferences.setNavTransitionMode(
+                runCatching { NavTransitionMode.valueOf(config.navTransitionMode) }
+                    .getOrDefault(NavTransitionMode.SLIDE)
+            )
+            preferences.setNavTransitionDurationMs(config.navTransitionDurationMs)
             customizationRepository.setSelfNickname(config.meNickname.ifBlank { null })
             customizationRepository.setSelfEmoji(config.meEmoji.ifBlank { null })
             customizationRepository.setSelfAvatar(config.meAvatarUri)

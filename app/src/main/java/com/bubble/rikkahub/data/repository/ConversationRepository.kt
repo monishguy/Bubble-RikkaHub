@@ -10,6 +10,7 @@ import com.bubble.rikkahub.data.remote.dto.SettingsDto
 import com.bubble.rikkahub.data.remote.dto.SseFrame
 import com.bubble.rikkahub.domain.model.Conversation
 import com.bubble.rikkahub.domain.model.Message
+import com.bubble.rikkahub.domain.model.MessagePart
 import com.bubble.rikkahub.util.MessageSplitter
 import com.bubble.rikkahub.util.TimestampParser
 import kotlinx.coroutines.flow.Flow
@@ -96,6 +97,13 @@ class ConversationRepository(
             runCatching { json.decodeFromString<List<Message>>(it) }.getOrNull()
         } ?: return null
         val last = messages.lastOrNull() ?: return null
+        if (last.content.isBlank() && last.hasAttachments) {
+            val a = last.attachments.firstOrNull() ?: return null
+            return when {
+                a.isImage -> "[图片]"
+                else -> "[文件] ${a.fileName ?: ""}".trim()
+            }
+        }
         val bubbles = MessageSplitter.split(last.content, splitStart, splitEnd)
         return bubbles.lastOrNull()?.takeIf { it.isNotBlank() }
     }
@@ -140,6 +148,9 @@ class ConversationRepository(
                         .joinToString("\n") { it.text!! }
                     if (text.isNotBlank()) {
                         count += MessageSplitter.split(text, splitStart, splitEnd).size
+                    } else if (active.parts.any { it.type != "text" }) {
+                        // Attachment-only message: each attachment counts as one bubble.
+                        count += active.parts.count { it.type != "text" }
                     }
                 }
             }
@@ -184,28 +195,46 @@ class ConversationRepository(
         val nodes = if (isGenerating) dto.messages.dropLast(1) else dto.messages
         return nodes.flatMap { node ->
             val active = node.messages.getOrNull(node.selectIndex)
-            if (active != null) messagesFromVariant(active, node.id) else emptyList()
+            if (active != null) listOfNotNull(messageFromVariant(active, node.id)) else emptyList()
         }
     }
 
-    private fun messagesFromVariant(msg: MessageDto, nodeId: String): List<Message> {
-        val textContent = msg.parts
-            .filter { it.type == "text" && !it.text.isNullOrBlank() }
-            .joinToString("\n") { it.text!! }
-        if (textContent.isBlank()) return emptyList()
+    /**
+     * Converts a server message (parts) into a domain [Message]. Text parts are joined into
+     * [Message.content]; image/document/… parts are kept in [Message.parts] (with their URLs
+     * resolved to loadable HTTP URLs) so the UI can render them. Returns null when the
+     * message has neither text nor attachments.
+     */
+    fun messageFromVariant(msg: MessageDto, nodeId: String): Message? {
         val role = when (msg.role.uppercase()) {
             "USER" -> Message.ROLE_USER
             "ASSISTANT" -> Message.ROLE_ASSISTANT
             "SYSTEM" -> Message.ROLE_SYSTEM
             else -> Message.ROLE_ASSISTANT
         }
-        return listOf(
-            Message(
-                id = msg.id.ifBlank { nodeId },
-                role = role,
-                content = textContent,
-                timestamp = TimestampParser.parse(msg.createdAt)
-            )
+        val textParts = mutableListOf<String>()
+        val attachments = mutableListOf<MessagePart>()
+        msg.parts.forEach { part ->
+            when (part.type) {
+                "text" -> part.text?.takeIf { it.isNotBlank() }?.let { textParts.add(it) }
+                "image", "video", "audio", "document" -> {
+                    val url = part.url?.let { api.resolveFileUrl(it) }
+                    if (!url.isNullOrBlank()) {
+                        attachments.add(
+                            MessagePart(type = part.type, url = url, fileName = part.fileName, mime = part.mime)
+                        )
+                    }
+                }
+            }
+        }
+        val textContent = textParts.joinToString("\n")
+        if (textContent.isBlank() && attachments.isEmpty()) return null
+        return Message(
+            id = msg.id.ifBlank { nodeId },
+            role = role,
+            content = textContent,
+            timestamp = TimestampParser.parse(msg.createdAt),
+            parts = attachments
         )
     }
 

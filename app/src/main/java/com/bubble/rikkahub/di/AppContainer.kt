@@ -94,7 +94,7 @@ class AppContainer(private val application: Application) {
 
     fun chatViewModel() =
         com.bubble.rikkahub.ui.screens.chat.ChatViewModel(
-            chatRepository, conversationRepository, appPreferences, connectionMonitor, customizationRepository
+            chatRepository, conversationRepository, appPreferences, connectionMonitor, customizationRepository, application
         )
 
     fun settingsViewModel() =

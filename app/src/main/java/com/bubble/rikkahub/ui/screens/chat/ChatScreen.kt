@@ -1,9 +1,15 @@
 package com.bubble.rikkahub.ui.screens.chat
 
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.provider.OpenableColumns
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material3.*
@@ -12,6 +18,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -42,6 +49,32 @@ fun ChatScreen(
         state.error?.let { snackbarHostState.showSnackbar(it); viewModel.clearError() }
     }
 
+    // ── Attachment pickers ──────────────────────────────────────
+    val context = LocalContext.current
+    // System photo picker (no permission needed, multi-select).
+    val imagePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.PickMultipleVisualMedia(maxItems = 10)
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            viewModel.addAttachments(uris.mapNotNull { buildPendingAttachment(context, it, isImage = true) })
+        }
+    }
+    // SAF document picker (no permission needed, multi-select).
+    val filePicker = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenMultipleDocuments()
+    ) { uris ->
+        if (uris.isNotEmpty()) {
+            uris.forEach { uri ->
+                runCatching {
+                    context.contentResolver.takePersistableUriPermission(
+                        uri, Intent.FLAG_GRANT_READ_URI_PERMISSION
+                    )
+                }
+            }
+            viewModel.addAttachments(uris.mapNotNull { buildPendingAttachment(context, it, isImage = false) })
+        }
+    }
+
     // Conversation info screen state
     var showCustomize by remember { mutableStateOf(false) }
     var showMenu by remember { mutableStateOf(false) }
@@ -49,6 +82,9 @@ fun ChatScreen(
 
     // Remember coroutine scope for dialog actions
     val coroutineScope = rememberCoroutineScope()
+
+    // Increment to force the message list to scroll to the bottom (input focused / send pressed).
+    var scrollSignal by remember { mutableStateOf(0) }
 
     val displayName = state.conversation?.displayName ?: "加载中..."
     val conv = state.conversation
@@ -85,6 +121,10 @@ fun ChatScreen(
     }
 
     Scaffold(
+        // The outer scaffold (MainNavGraph) already handles the navigation-bar inset for the
+        // whole screen, so this nested scaffold must not add another one (that caused a blank
+        // strip below the input bar). The top bar handles the status bar itself.
+        contentWindowInsets = WindowInsets(0.dp),
         topBar = {
             ChatTopBar(
                 title = displayName,
@@ -110,67 +150,96 @@ fun ChatScreen(
                 }
             )
         },
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        bottomBar = {
-            ChatInputBar(
-                inputText = state.currentInputText,
-                onInputTextChanged = viewModel::onInputTextChanged,
-                onSend = viewModel::commitBubble,
-                onRemoveLast = viewModel::removeLastBubble,
-                pendingBubbles = state.pendingBubbles,
-                sendMode = state.sendMode,
-                timerSecondsRemaining = state.timerSecondsRemaining,
-                isSending = state.isSending,
-                queuedSends = state.queuedSends,
-                modifier = Modifier.imePadding()
-            )
-        }
+        snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
-        when {
-            state.conversation == null && state.error == null -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator()
-                }
-            }
-            state.error != null && state.messages.isEmpty() -> {
-                Box(Modifier.fillMaxSize().padding(padding), contentAlignment = Alignment.Center) {
-                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                        Text(state.error ?: "", color = MaterialTheme.colorScheme.error)
-                        Spacer(Modifier.height(16.dp))
-                        Button(onClick = { viewModel.loadConversation(conversationId) }) {
-                            Text("重试")
+        // The list AND the input bar live in one imePadding()'ed column, so when the keyboard
+        // opens the whole column shrinks: the message list rises together with the input bar
+        // instead of being covered by it.
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .padding(padding)
+                // ime ∪ navigationBars = the keyboard when it's open (so the input bar sits
+                // flush against it and the list shrinks), or just the navigation bar when closed.
+                .windowInsetsPadding(WindowInsets.ime.union(WindowInsets.navigationBars))
+        ) {
+            Box(Modifier.weight(1f)) {
+                when {
+                    state.conversation == null && state.error == null -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator()
+                        }
+                    }
+                    state.error != null && state.messages.isEmpty() -> {
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(state.error ?: "", color = MaterialTheme.colorScheme.error)
+                                Spacer(Modifier.height(16.dp))
+                                Button(onClick = { viewModel.loadConversation(conversationId) }) {
+                                    Text("重试")
+                                }
+                            }
+                        }
+                    }
+                    else -> {
+                        ChatBackground(
+                            uri = conv?.chatBackgroundUri,
+                            color = conv?.chatBackgroundColor
+                        ) {
+                            BubbleList(
+                                messages = state.messages,
+                                avatarMode = state.avatarMode,
+                                avatarUri = avatarUri?.toString() ?: conv?.customAvatarUri,
+                                emoji = conv?.customEmoji,
+                                avatarUrl = conv?.avatarUrl,
+                                displayName = displayName,
+                                meAvatarUri = meProfile?.avatarUri,
+                                meEmoji = meProfile?.avatarEmoji,
+                                meDisplayName = meProfile?.nickname ?: "我",
+                                isStreaming = state.isStreaming,
+                                streamingMessageId = null,
+                                bubbleAnimScaleFrom = state.bubbleAnimScaleFrom,
+                                bubbleAnimDurationMs = state.bubbleAnimDurationMs,
+                                bubbleAnimBounce = state.bubbleAnimBounce,
+                                bubbleAnimBounciness = state.bubbleAnimBounciness,
+                                // Bubble split delimiters, used to split the text of attachment
+                                // messages into separate bubbles at render time.
+                                splitStart = state.splitStart,
+                                splitEnd = state.splitEnd,
+                                // When the input is focused (keyboard up) or a send is pressed,
+                                // jump to the latest message so it's never hidden.
+                                scrollToBottomSignal = scrollSignal,
+                                modifier = Modifier.fillMaxSize()
+                            )
                         }
                     }
                 }
             }
-            else -> {
-                ChatBackground(
-                    uri = conv?.chatBackgroundUri,
-                    color = conv?.chatBackgroundColor
-                ) {
-                    BubbleList(
-                        messages = state.messages,
-                        avatarMode = state.avatarMode,
-                        avatarUri = avatarUri?.toString() ?: conv?.customAvatarUri,
-                        emoji = conv?.customEmoji,
-                        avatarUrl = conv?.avatarUrl,
-                        displayName = displayName,
-                        meAvatarUri = meProfile?.avatarUri,
-                        meEmoji = meProfile?.avatarEmoji,
-                        meDisplayName = meProfile?.nickname ?: "我",
-                        isStreaming = state.isStreaming,
-                        streamingMessageId = null,
-                        bubbleAnimScaleFrom = state.bubbleAnimScaleFrom,
-                        bubbleAnimDurationMs = state.bubbleAnimDurationMs,
-                        bubbleAnimBounce = state.bubbleAnimBounce,
-                        bubbleAnimBounciness = state.bubbleAnimBounciness,
-                        // No imePadding here: the ChatInputBar already lifts above the keyboard,
-                        // and the Scaffold shrinks the list accordingly. Double imePadding caused
-                        // a big black/blank gap when the keyboard opened.
-                        modifier = Modifier.fillMaxSize().padding(padding)
+            ChatInputBar(
+                inputText = state.currentInputText,
+                onInputTextChanged = viewModel::onInputTextChanged,
+                // Send also scrolls to the bottom so the latest user message is always visible.
+                onSend = {
+                    viewModel.commitBubble()
+                    scrollSignal++
+                },
+                // Tapping the input (keyboard opens) jumps to the latest message.
+                onInputFocused = { scrollSignal++ },
+                onRemoveLast = viewModel::removeLastBubble,
+                pendingBubbles = state.pendingBubbles,
+                pendingAttachments = state.pendingAttachments,
+                onRemoveAttachment = viewModel::removeAttachment,
+                onPickImages = {
+                    imagePicker.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
                     )
-                }
-            }
+                },
+                onPickFiles = { filePicker.launch(arrayOf("*/*")) },
+                sendMode = state.sendMode,
+                timerSecondsRemaining = state.timerSecondsRemaining,
+                isSending = state.isSending,
+                queuedSends = state.queuedSends
+            )
         }
     }
 }
@@ -189,5 +258,25 @@ private fun ChatBackground(uri: String?, color: Long?, content: @Composable () -
             color != null -> Box(Modifier.fillMaxSize().background(Color(color)))
         }
         content()
+    }
+}
+
+/** Builds a [PendingAttachment] for a picked content URI (queries the display name/mime). */
+private fun buildPendingAttachment(context: Context, uri: Uri, isImage: Boolean): PendingAttachment? {
+    val mime = context.contentResolver.getType(uri)
+        ?: if (isImage) "image/*" else "application/octet-stream"
+    val name = queryDisplayName(context, uri)
+        ?: (if (isImage) "image_${System.currentTimeMillis()}.jpg" else "file")
+    return PendingAttachment(uri = uri.toString(), fileName = name, mime = mime, isImage = isImage)
+}
+
+private fun queryDisplayName(context: Context, uri: Uri): String? {
+    return try {
+        context.contentResolver.query(uri, null, null, null, null)?.use { cursor ->
+            val idx = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+            if (idx >= 0 && cursor.moveToFirst()) cursor.getString(idx) else null
+        }
+    } catch (_: Exception) {
+        null
     }
 }

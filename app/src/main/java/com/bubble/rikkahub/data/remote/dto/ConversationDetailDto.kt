@@ -37,5 +37,9 @@ data class MessageDto(
 @Serializable
 data class UIMessagePartDto(
     val type: String = "text",
-    val text: String? = null
+    val text: String? = null,
+    /** Attachment reference: a file:// URI from upload, or an http(s) URL. */
+    val url: String? = null,
+    val fileName: String? = null,
+    val mime: String? = null
 )

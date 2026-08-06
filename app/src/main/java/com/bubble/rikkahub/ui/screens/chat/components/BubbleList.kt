@@ -35,6 +35,7 @@ import androidx.compose.runtime.snapshotFlow
 import kotlinx.coroutines.launch
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import com.bubble.rikkahub.domain.model.AvatarMode
 import com.bubble.rikkahub.domain.model.Message
@@ -62,6 +63,10 @@ fun BubbleList(
     bubbleAnimDurationMs: Int = 400,
     bubbleAnimBounce: Boolean = true,
     bubbleAnimBounciness: Int = 60,
+    splitStart: String = "#",
+    splitEnd: String = "*",
+    /** Increment to force-scroll to the bottom (input focused / send pressed). */
+    scrollToBottomSignal: Int = 0,
     modifier: Modifier = Modifier
 ) {
     val listState = rememberLazyListState()
@@ -91,6 +96,18 @@ fun BubbleList(
         }
     }
 
+    // Force-scroll to bottom when the signal changes (input focused / send pressed), so the
+    // latest message is always visible while typing or right after sending.
+    LaunchedEffect(scrollToBottomSignal) {
+        if (scrollToBottomSignal > 0 && messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size - 1)
+        }
+    }
+
+    // Track the viewport height so the onSizeChanged handler below can tell when the keyboard
+    // opens (it shrinks the list) and re-pin the list to the bottom.
+    var lastViewportHeight by remember { mutableStateOf(0) }
+
     // Auto-scroll to bottom. The first display jumps instantly (so re-entering lands on the
     // latest message); later additions only auto-scroll if the user is already at the bottom.
     LaunchedEffect(messages.size, isStreaming) {
@@ -110,7 +127,16 @@ fun BubbleList(
     Box(modifier = modifier.fillMaxSize()) {
     LazyColumn(
         state = listState,
-        modifier = Modifier.fillMaxSize(),
+        modifier = Modifier
+            .fillMaxSize()
+            .onSizeChanged { size ->
+                // When the keyboard opens the viewport shrinks, hiding the latest message behind
+                // the input bar — jump back to the bottom so it stays visible.
+                if (lastViewportHeight > 0 && size.height < lastViewportHeight && messages.isNotEmpty()) {
+                    coroutineScope.launch { listState.scrollToItem(messages.size - 1) }
+                }
+                lastViewportHeight = size.height
+            },
         contentPadding = PaddingValues(vertical = 8.dp),
         reverseLayout = false
     ) {
@@ -146,7 +172,9 @@ fun BubbleList(
                         displayName = displayName,
                         meAvatarUri = meAvatarUri,
                         meEmoji = meEmoji,
-                        meDisplayName = meDisplayName
+                        meDisplayName = meDisplayName,
+                        splitStart = splitStart,
+                        splitEnd = splitEnd
                     )
                 }
             }

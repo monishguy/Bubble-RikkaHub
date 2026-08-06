@@ -20,6 +20,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalLayoutDirection
+import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.lifecycle.viewmodel.initializer
@@ -137,7 +138,10 @@ fun MainNavGraph(appContainer: AppContainer, initialConversationId: String? = nu
                 // strip above every screen's top bar.
                 start = innerPadding.calculateStartPadding(LocalLayoutDirection.current),
                 end = innerPadding.calculateEndPadding(LocalLayoutDirection.current),
-                bottom = innerPadding.calculateBottomPadding()
+                // On the chat screen the bottom inset is handled inside ChatScreen
+                // (ime ∪ navigationBars), so don't double-apply it here — that created a gap
+                // between the keyboard and the input bar.
+                bottom = if (isOnChat) 0.dp else innerPadding.calculateBottomPadding()
             ),
             enterTransition = { enter },
             exitTransition = { exit },

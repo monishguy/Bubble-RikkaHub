@@ -7,29 +7,35 @@ import android.widget.Toast
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Surface
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.InsertDriveFile
+import androidx.compose.material3.*
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.bubble.rikkahub.domain.model.Message
+import com.bubble.rikkahub.domain.model.MessagePart
 import com.bubble.rikkahub.ui.components.BubbleAvatar
 import com.bubble.rikkahub.ui.components.MarkdownText
 import com.bubble.rikkahub.ui.theme.BubbleShape
+import com.bubble.rikkahub.util.MessageSplitter
 
 /**
  * Renders a single chat bubble with optional avatar.
  * - User bubbles: right-aligned, primaryContainer color, shows the user's own avatar
  * - AI bubbles: left-aligned, surfaceVariant color, shows the conversation/assistant avatar
+ *
+ * Messages with attachments show the images/files as cards WITHOUT a bubble background
+ * (each counts as its own bubble), followed by the text bubbles (split by the configured
+ * delimiters). Pure-text messages render as the usual single bubble.
+ *
  * Long-pressing a bubble copies its text to the clipboard.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -44,26 +50,32 @@ fun MessageBubble(
     meAvatarUri: String? = null,
     meEmoji: String? = null,
     meDisplayName: String = "",
+    splitStart: String = "#",
+    splitEnd: String = "*",
     modifier: Modifier = Modifier
 ) {
     if (message.isUser) {
         UserBubble(
-            content = message.content,
+            message = message,
             showAvatar = showAvatar,
             avatarUri = meAvatarUri,
             emoji = meEmoji,
             avatarUrl = null,
             displayName = meDisplayName.ifBlank { "我" },
+            splitStart = splitStart,
+            splitEnd = splitEnd,
             modifier = modifier
         )
     } else {
         AiBubble(
-            content = message.content,
+            message = message,
             showAvatar = showAvatar,
             avatarUri = avatarUri,
             emoji = emoji,
             avatarUrl = avatarUrl,
             displayName = displayName,
+            splitStart = splitStart,
+            splitEnd = splitEnd,
             modifier = modifier
         )
     }
@@ -72,12 +84,14 @@ fun MessageBubble(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun UserBubble(
-    content: String,
+    message: Message,
     showAvatar: Boolean,
     avatarUri: String?,
     emoji: String?,
     avatarUrl: String?,
     displayName: String,
+    splitStart: String,
+    splitEnd: String,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -90,20 +104,8 @@ private fun UserBubble(
         verticalAlignment = Alignment.Bottom
     ) {
         Box {
-            Surface(
-                shape = BubbleShape,
-                color = MaterialTheme.colorScheme.primaryContainer,
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .combinedClickable(onClick = {}, onLongClick = { showMenu = true })
-            ) {
-                MarkdownText(
-                    text = content,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                )
-            }
-            BubbleContextMenu(showMenu, { showMenu = false }) { copyToClipboard(context, content) }
+            MessageContent(message, splitStart, splitEnd, isUser = true) { showMenu = true }
+            BubbleContextMenu(showMenu, { showMenu = false }) { copyToClipboard(context, message.content) }
         }
 
         if (showAvatar) {
@@ -126,12 +128,14 @@ private fun UserBubble(
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun AiBubble(
-    content: String,
+    message: Message,
     showAvatar: Boolean,
     avatarUri: String?,
     emoji: String?,
     avatarUrl: String?,
     displayName: String,
+    splitStart: String,
+    splitEnd: String,
     modifier: Modifier = Modifier
 ) {
     val context = LocalContext.current
@@ -157,20 +161,112 @@ private fun AiBubble(
         }
 
         Box {
-            Surface(
-                shape = BubbleShape,
-                color = MaterialTheme.colorScheme.surfaceVariant,
-                modifier = Modifier
-                    .widthIn(max = 300.dp)
-                    .combinedClickable(onClick = {}, onLongClick = { showMenu = true })
-            ) {
-                MarkdownText(
-                    text = content,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
-                )
+            MessageContent(message, splitStart, splitEnd, isUser = false) { showMenu = true }
+            BubbleContextMenu(showMenu, { showMenu = false }) { copyToClipboard(context, message.content) }
+        }
+    }
+}
+
+/**
+ * The message body: attachment cards (no bubble background) + text bubbles.
+ * Pure-text messages render as a single bubble.
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun MessageContent(
+    message: Message,
+    splitStart: String,
+    splitEnd: String,
+    isUser: Boolean,
+    onLongPress: () -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .widthIn(max = 300.dp)
+            .combinedClickable(onClick = {}, onLongClick = onLongPress)
+    ) {
+        if (!message.hasAttachments) {
+            TextBubble(text = message.content, isUser = isUser)
+        } else {
+            // Memoize the text-bubble split so a bubble recomposing doesn't re-parse unchanged text.
+            val textBubbles = remember(message.content, splitStart, splitEnd) {
+                if (message.content.isBlank()) emptyList()
+                else MessageSplitter.split(message.content, splitStart, splitEnd)
             }
-            BubbleContextMenu(showMenu, { showMenu = false }) { copyToClipboard(context, content) }
+            Column(horizontalAlignment = if (isUser) Alignment.End else Alignment.Start) {
+                message.attachments.forEach { part ->
+                    AttachmentCard(part)
+                    Spacer(Modifier.height(6.dp))
+                }
+                textBubbles.forEachIndexed { index, text ->
+                    if (index > 0) Spacer(Modifier.height(4.dp))
+                    TextBubble(text = text, isUser = isUser)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun TextBubble(text: String, isUser: Boolean) {
+    Surface(
+        shape = BubbleShape,
+        color = if (isUser) MaterialTheme.colorScheme.primaryContainer else MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        MarkdownText(
+            text = text,
+            color = if (isUser) MaterialTheme.colorScheme.onPrimaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)
+        )
+    }
+}
+
+/** A single attachment (image card / file card), shown WITHOUT a bubble background. */
+@Composable
+private fun AttachmentCard(part: MessagePart) {
+    when {
+        part.isImage -> AsyncImage(
+            model = part.url,
+            contentDescription = part.fileName ?: "图片",
+            contentScale = ContentScale.Crop,
+            modifier = Modifier
+                .widthIn(max = 240.dp)
+                .heightIn(max = 240.dp)
+                .clip(RoundedCornerShape(12.dp))
+        )
+        else -> Surface(
+            shape = RoundedCornerShape(12.dp),
+            color = MaterialTheme.colorScheme.surfaceVariant,
+            modifier = Modifier.width(220.dp)
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp)
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.InsertDriveFile,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(modifier = Modifier.weight(1f)) {
+                    Text(
+                        text = part.fileName ?: "文件",
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    if (!part.mime.isNullOrBlank()) {
+                        Text(
+                            text = part.mime,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis
+                        )
+                    }
+                }
+            }
         }
     }
 }

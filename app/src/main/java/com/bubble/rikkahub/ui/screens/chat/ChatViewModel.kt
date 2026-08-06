@@ -1,5 +1,8 @@
 package com.bubble.rikkahub.ui.screens.chat
 
+import android.content.Context
+import android.net.Uri
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.bubble.rikkahub.data.ConversationVisibility
@@ -8,15 +11,17 @@ import com.bubble.rikkahub.data.remote.ConnectionMonitor
 import com.bubble.rikkahub.data.remote.dto.ConversationNodeUpdateEvent
 import com.bubble.rikkahub.data.remote.dto.ConversationSnapshotEvent
 import com.bubble.rikkahub.data.remote.dto.ErrorEvent
-import com.bubble.rikkahub.data.remote.dto.MessageDto
 import com.bubble.rikkahub.data.remote.dto.MessageSendException
 import com.bubble.rikkahub.data.remote.dto.SseFrame
+import com.bubble.rikkahub.data.remote.dto.UIMessagePartDto
+import com.bubble.rikkahub.data.remote.dto.UploadFileData
 import com.bubble.rikkahub.data.repository.ChatRepository
 import com.bubble.rikkahub.data.repository.ConversationRepository
 import com.bubble.rikkahub.data.repository.CustomizationRepository
 import com.bubble.rikkahub.domain.model.AvatarMode
 import com.bubble.rikkahub.domain.model.Conversation
 import com.bubble.rikkahub.domain.model.Message
+import com.bubble.rikkahub.domain.model.MessagePart
 import com.bubble.rikkahub.domain.model.SendMode
 import com.bubble.rikkahub.util.MessageSplitter
 import com.bubble.rikkahub.util.TimestampParser
@@ -34,10 +39,19 @@ import kotlinx.serialization.json.Json
 import java.util.UUID
 import kotlin.random.Random
 
+/** An image/document the user has attached but not yet sent. */
+data class PendingAttachment(
+    val uri: String,
+    val fileName: String,
+    val mime: String,
+    val isImage: Boolean
+)
+
 data class ChatUiState(
     val conversation: Conversation? = null,
     val messages: List<Message> = emptyList(),
     val pendingBubbles: List<String> = emptyList(),
+    val pendingAttachments: List<PendingAttachment> = emptyList(),
     val currentInputText: String = "",
     val isStreaming: Boolean = false,
     val isSending: Boolean = false,
@@ -47,6 +61,9 @@ data class ChatUiState(
     val error: String? = null,
     /** Number of undelivered messages queued locally for this conversation. */
     val queuedSends: Int = 0,
+    // Bubble split delimiters (from settings) — used to split text inside attachment messages.
+    val splitStart: String = AppPreferences.DEFAULT_SPLIT_START,
+    val splitEnd: String = AppPreferences.DEFAULT_SPLIT_END,
     // Bubble pop-in animation params (from settings)
     val bubbleAnimScaleFrom: Float = AppPreferences.DEFAULT_BUBBLE_ANIM_SCALE,
     val bubbleAnimDurationMs: Int = AppPreferences.DEFAULT_BUBBLE_ANIM_DURATION,
@@ -59,7 +76,8 @@ class ChatViewModel(
     private val conversationRepository: ConversationRepository,
     private val appPreferences: AppPreferences,
     private val connectionMonitor: ConnectionMonitor,
-    private val customizationRepository: CustomizationRepository
+    private val customizationRepository: CustomizationRepository,
+    private val appContext: Context
 ) : ViewModel() {
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -83,6 +101,8 @@ class ChatViewModel(
     private var autoFormatPromptText: String = AppPreferences.DEFAULT_AUTO_FORMAT_PROMPT_TEXT
     /** True once this conversation has at least one user-sent message (AI messages don't count). */
     private var hasUserMessage = false
+    /** Ids of the optimistic user bubbles added by commitBubble, in commit order (for undo). */
+    private val pendingOptimisticIds = mutableListOf<String>()
 
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -123,7 +143,9 @@ class ChatViewModel(
                     bubbleAnimScaleFrom = animScale,
                     bubbleAnimDurationMs = animDuration,
                     bubbleAnimBounce = animBounce,
-                    bubbleAnimBounciness = animBounciness
+                    bubbleAnimBounciness = animBounciness,
+                    splitStart = splitStart,
+                    splitEnd = splitEnd
                 )
             }
 
@@ -197,13 +219,32 @@ class ChatViewModel(
     fun commitBubble() {
         val text = _uiState.value.currentInputText.trim()
         if (text.isBlank()) {
-            if (_uiState.value.sendMode == SendMode.MANUAL && _uiState.value.pendingBubbles.isNotEmpty()) {
+            if (_uiState.value.sendMode == SendMode.MANUAL &&
+                (_uiState.value.pendingBubbles.isNotEmpty() || _uiState.value.pendingAttachments.isNotEmpty())
+            ) {
                 triggerSend()
             }
             return
         }
         val newBubbles = _uiState.value.pendingBubbles + text
-        _uiState.update { it.copy(pendingBubbles = newBubbles, currentInputText = "") }
+        // Committed bubbles pop straight into the chat (WeChat-style) even though they're only
+        // packed + sent once the timer/manual submit fires. The actual send is tracked by
+        // pendingBubbles; the optimistic copy just makes the UI feel instant.
+        val optimisticId = "user-${UUID.randomUUID()}"
+        pendingOptimisticIds.add(optimisticId)
+        val optimistic = Message(
+            id = optimisticId,
+            role = Message.ROLE_USER,
+            content = text,
+            timestamp = System.currentTimeMillis()
+        )
+        _uiState.update {
+            it.copy(
+                pendingBubbles = newBubbles,
+                currentInputText = "",
+                messages = it.messages + optimistic
+            )
+        }
         when (_uiState.value.sendMode) {
             SendMode.TIMER -> startTimer()
             SendMode.MANUAL -> {}
@@ -213,23 +254,40 @@ class ChatViewModel(
     fun removeLastBubble() {
         val bubbles = _uiState.value.pendingBubbles
         if (bubbles.isNotEmpty()) {
-            _uiState.update { it.copy(pendingBubbles = bubbles.dropLast(1)) }
+            val removedId = pendingOptimisticIds.removeLastOrNull()
+            _uiState.update {
+                it.copy(
+                    pendingBubbles = bubbles.dropLast(1),
+                    messages = if (removedId != null) {
+                        it.messages.filterNot { m -> m.id == removedId }
+                    } else it.messages
+                )
+            }
             if (_uiState.value.sendMode == SendMode.TIMER) startTimer()
+        }
+    }
+
+    /** Adds images/documents the user picked for the next send. */
+    fun addAttachments(attachments: List<PendingAttachment>) {
+        if (attachments.isEmpty()) return
+        _uiState.update { it.copy(pendingAttachments = it.pendingAttachments + attachments) }
+        // In TIMER mode attachments alone would never send (no text commit starts the timer),
+        // so starting it here makes them auto-send like text bubbles.
+        if (_uiState.value.sendMode == SendMode.TIMER && !_uiState.value.isSending) startTimer()
+    }
+
+    fun removeAttachment(uri: String) {
+        _uiState.update {
+            it.copy(pendingAttachments = it.pendingAttachments.filterNot { a -> a.uri == uri })
         }
     }
 
     fun triggerSend() {
         val bubbles = _uiState.value.pendingBubbles
-        if (bubbles.isEmpty()) return
+        val attachments = _uiState.value.pendingAttachments
+        if (bubbles.isEmpty() && attachments.isEmpty()) return
         cancelTimer()
-
-        val userMessages = bubbles.map { text ->
-            Message(id = "user-${UUID.randomUUID()}", role = Message.ROLE_USER,
-                content = text, timestamp = System.currentTimeMillis())
-        }
-        _uiState.update {
-            it.copy(messages = it.messages + userMessages, pendingBubbles = emptyList(), isSending = true, error = null)
-        }
+        _uiState.update { it.copy(isSending = true, error = null) }
         hasPendingSend = true
 
         val needsFormatPrompt = autoFormatPromptEnabled && !hasUserMessage
@@ -246,33 +304,105 @@ class ChatViewModel(
         hasUserMessage = true
         viewModelScope.launch {
             try {
-                // 1. Send message (202 Accepted)
-                chatRepository.sendMessage(conversationId, packedMessage)
+                // 1. Upload attachments (if any) — returns descriptors whose url is the
+                //    server-local file:// URI that message parts reference.
+                val readyFiles = attachments.mapNotNull { a ->
+                    readUriBytes(a.uri)?.let { bytes -> a to UploadFileData(bytes, a.fileName, a.mime) }
+                }
+                val uploadedPairs = if (readyFiles.isNotEmpty()) {
+                    readyFiles.zip(chatRepository.uploadFiles(readyFiles.map { it.second })) { (att, _), f ->
+                        att to f
+                    }
+                } else emptyList()
+
+                // 2. Build the message parts: text first, then each attachment.
+                val parts = buildList {
+                    if (packedMessage.isNotBlank()) {
+                        add(UIMessagePartDto(type = "text", text = packedMessage))
+                    }
+                    uploadedPairs.forEach { (a, f) ->
+                        add(
+                            UIMessagePartDto(
+                                type = if (a.isImage) "image" else "document",
+                                url = f.url,
+                                fileName = f.fileName,
+                                mime = f.mime
+                            )
+                        )
+                    }
+                }
+                if (parts.isEmpty()) {
+                    _uiState.update { it.copy(isSending = false, error = "没有可发送的内容") }
+                    hasPendingSend = false
+                    return@launch
+                }
+
+                // 3. Send message (202 Accepted).
+                chatRepository.sendMessageWithParts(conversationId, parts)
                 connectionMonitor.reportSuccess()
-                // 2. Start polling for the reply (works even if the SSE stream is down).
+
+                // 4. Show the sent attachments optimistically (the text bubbles already popped
+                //    in at commit time). Their URLs are resolved to loadable HTTP URLs.
+                _uiState.update { state ->
+                    val newMessages = if (uploadedPairs.isNotEmpty()) {
+                        val attachmentParts = uploadedPairs.map { (a, f) ->
+                            MessagePart(
+                                type = if (a.isImage) "image" else "document",
+                                url = chatRepository.resolveFileUrl(f.url),
+                                fileName = f.fileName,
+                                mime = f.mime
+                            )
+                        }
+                        state.messages + Message(
+                            id = "user-${UUID.randomUUID()}",
+                            role = Message.ROLE_USER,
+                            content = "",
+                            timestamp = System.currentTimeMillis(),
+                            parts = attachmentParts
+                        )
+                    } else state.messages
+                    state.copy(
+                        messages = newMessages,
+                        pendingBubbles = emptyList(),
+                        pendingAttachments = emptyList(),
+                        isSending = false
+                    )
+                }
+                pendingOptimisticIds.clear()
+                // 5. Start polling for the reply (works even if the SSE stream is down).
                 ensureStatusPoll()
             } catch (e: CancellationException) {
                 throw e
             } catch (e: java.io.IOException) {
-                // Transient network failure: keep the optimistically-shown bubbles and queue
-                // the message locally; it auto-sends when the connection returns.
                 connectionMonitor.reportFailure()
-                chatRepository.enqueuePending(conversationId, packedMessage)
-                refreshQueuedCount()
-                _uiState.update {
-                    it.copy(isSending = false, error = "发送失败（网络问题），已排队，网络恢复后自动发送")
+                if (attachments.isNotEmpty()) {
+                    // Attachments can't be re-uploaded automatically — keep the pending bubbles
+                    // so the user can retry, and surface the error.
+                    _uiState.update {
+                        it.copy(isSending = false, error = "发送失败（网络问题），请重试")
+                    }
+                } else {
+                    // Transient network failure: keep the optimistically-shown bubbles and queue
+                    // the message locally; it auto-sends when the connection returns.
+                    chatRepository.enqueuePending(conversationId, packedMessage)
+                    refreshQueuedCount()
+                    pendingOptimisticIds.clear()
+                    _uiState.update {
+                        it.copy(isSending = false, pendingBubbles = emptyList(), error = "发送失败（网络问题），已排队，网络恢复后自动发送")
+                    }
                 }
             } catch (e: MessageSendException) {
-                if (e.status.value >= 500) {
+                if (e.status.value >= 500 && attachments.isEmpty()) {
                     // Server-side failure — likely transient; queue it so the message isn't lost.
                     connectionMonitor.reportFailure()
                     chatRepository.enqueuePending(conversationId, packedMessage)
                     refreshQueuedCount()
+                    pendingOptimisticIds.clear()
                     _uiState.update {
-                        it.copy(isSending = false, error = "服务器繁忙（HTTP ${e.status.value}），已排队，稍后自动重试")
+                        it.copy(isSending = false, pendingBubbles = emptyList(), error = "服务器繁忙（HTTP ${e.status.value}），已排队，稍后自动重试")
                     }
                 } else {
-                    // Client error (4xx): surface the real error; don't queue.
+                    // Client error (4xx) or an attachment send that failed — surface the real error.
                     _uiState.update {
                         it.copy(isSending = false, error = e.message ?: "发送失败")
                     }
@@ -284,6 +414,16 @@ class ChatViewModel(
                     it.copy(isSending = false, error = "发送失败：${e.message ?: "未知错误"}")
                 }
             }
+        }
+    }
+
+    /** Reads a picked file (content URI) into memory for upload. Returns null on failure. */
+    private fun readUriBytes(uriString: String): ByteArray? {
+        return try {
+            appContext.contentResolver.openInputStream(Uri.parse(uriString))?.use { it.readBytes() }
+        } catch (e: Exception) {
+            Log.w(TAG, "读取附件失败: $uriString", e)
+            null
         }
     }
 
@@ -464,26 +604,10 @@ class ChatViewModel(
         val nodes = if (conv.isGenerating) conv.messages.dropLast(1) else conv.messages
         return nodes.flatMap { node ->
             val active = node.messages.getOrNull(node.selectIndex)
-            if (active != null) {
-                val text = partsToText(active)
-                if (text.isNotBlank()) {
-                    val role = when (active.role.uppercase()) {
-                        "USER" -> Message.ROLE_USER
-                        else -> Message.ROLE_ASSISTANT
-                    }
-                    listOf(
-                        Message(
-                            // CRITICAL: use the same id scheme as getConversationWithMessages
-                            // (msg.id, the variant id) so snapshot merges don't treat every
-                            // message as new and duplicate the whole history.
-                            id = active.id.ifBlank { node.id },
-                            role = role,
-                            content = text,
-                            timestamp = TimestampParser.parse(active.createdAt)
-                        )
-                    )
-                } else emptyList()
-            } else emptyList()
+            // Uses the same conversion as getConversationWithMessages (msg.id, the variant id)
+            // so snapshot merges don't treat every message as new and duplicate the history.
+            if (active != null) listOfNotNull(conversationRepository.messageFromVariant(active, node.id))
+            else emptyList()
         }
     }
 
@@ -491,13 +615,19 @@ class ChatViewModel(
      * Splits messages into bubbles using the configured delimiters. Applied to BOTH user and
      * assistant messages: the app packs the user's bubbles with delimiters before sending, so
      * the server echoes them back packed and they must be split again on load/refresh.
-     * Messages with no matching delimiters stay as a single bubble.
+     * Messages with no matching delimiters stay as a single bubble. Messages that carry
+     * attachments are rendered as one group (attachments + text bubbles) inside a single list
+     * item, so they are not pre-split here.
      */
     private fun splitMessages(messages: List<Message>): List<Message> {
         return messages.flatMap { msg ->
             val content = if (msg.role == Message.ROLE_USER) stripFormatPrompt(msg.content) else msg.content
-            MessageSplitter.split(content, splitStart, splitEnd)
-                .mapIndexed { i, c -> msg.copy(id = "${msg.id}-$i", content = c) }
+            if (msg.hasAttachments) {
+                listOf(msg.copy(content = content))
+            } else {
+                MessageSplitter.split(content, splitStart, splitEnd)
+                    .mapIndexed { i, c -> msg.copy(id = "${msg.id}-$i", content = c) }
+            }
         }
     }
 
@@ -509,11 +639,6 @@ class ChatViewModel(
         if (autoFormatPromptText.isBlank()) return text
         val prompt = autoFormatPromptText.replace("{start}", splitStart).replace("{end}", splitEnd)
         return if (text.startsWith(prompt)) text.removePrefix(prompt).removePrefix("\n") else text
-    }
-
-    private fun partsToText(msg: MessageDto): String {
-        return msg.parts.filter { it.type == "text" && !it.text.isNullOrBlank() }
-            .joinToString("\n") { it.text!! }
     }
 
     private suspend fun refreshQueuedCount() {
@@ -565,6 +690,7 @@ class ChatViewModel(
     }
 
     private companion object {
+        private const val TAG = "ChatViewModel"
         /** Upper bound on poll iterations (~2-5 minutes) so a stuck conversation can't poll forever. */
         const val MAX_POLLS = 40
     }
